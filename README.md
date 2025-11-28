@@ -2,7 +2,7 @@
 
 使用 Google 的 Gemini 3 Pro (Nano Banana Pro) 视觉翻译 PDF 文档，同时保持其精确的布局、字体颜色和格式。
 
-![产品截图](images/20251128-154412.jpg)
+![产品截图](images/20251128-185643.jpg)
 
 ![产品截图 2](images/20251128184427_4311_787.png)
 
