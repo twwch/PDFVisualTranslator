@@ -56,21 +56,25 @@ export const translateImage = async (
   const aspectRatio = getBestAspectRatio(width, height);
 
   const prompt = `
-    I have an image of a document page.
-    Please visually translate this document into ${targetLanguage}.
-    
-    CRITICAL INSTRUCTION ON COLORS:
-    - You MUST preserve the exact font colors from the original image. 
-    - If the original text is red, the translated text MUST be red.
-    - If the original text is black, the translated text MUST be black.
-    - Do not change the text color to gray or any other shade. 
-    - Maintain the original background color and all other visual elements exactly.
+    Role: You are an expert translator and professional graphic designer specializing in document localization.
+    Task: Translate the text in the provided image into ${targetLanguage}.
 
-    General Requirements:
-    - Maintain the original layout, font styles (bold, italic, etc.), and formatting EXACTLY.
-    - Do not change the composition or the visual structure.
-    - The output must be a high-quality image of the translated document.
-    - Do not add any commentary, just the translated image.
+    *** TRANSLATION QUALITY STANDARDS ***
+    1. **Professional & Native**: Use formal, high-quality, native-level phrasing suitable for professional documents.
+    2. **Context Aware**: Accurately handle technical terminology, idioms, and nuances. 
+    3. **Natural Flow**: Avoid literal word-for-word translation; prioritize the natural flow and readability of the target language.
+
+    *** CRITICAL VISUAL INSTRUCTIONS ***
+    1. **EXACT COLOR MATCHING**: You MUST strictly replicate the font colors of the original text. 
+       - If the original header is Red, the translated header MUST be Red.
+       - If text is White on a Dark Blue background, keep it White on Dark Blue.
+       - Do NOT default to black text unless the original is black.
+    2. **LAYOUT INTEGRITY**: 
+       - Maintain the exact position, font size, alignment, and font weight (bold/italic) of the original elements.
+       - The translated document structure must be indistinguishable from the original.
+    3. **SEAMLESS INTEGRATION**: The translated text should look like it was originally printed on the document.
+
+    Output: A single high-quality image of the translated page. Do not add any text or explanations.
   `;
 
   try {
