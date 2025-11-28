@@ -5,13 +5,23 @@ import { jsPDF } from 'jspdf';
 // We use cdnjs for the worker as it is reliable for this specific file.
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs`;
 
-export const convertPdfToImages = async (file: File): Promise<string[]> => {
+export const getPdfPageCount = async (file: File): Promise<number> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  return pdf.numPages;
+};
+
+export const convertPdfToImages = async (file: File, startPage?: number, endPage?: number): Promise<string[]> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const numPages = pdf.numPages;
   const images: string[] = [];
 
-  for (let i = 1; i <= numPages; i++) {
+  // Determine range
+  const start = startPage ? Math.max(1, startPage) : 1;
+  const end = endPage ? Math.min(numPages, endPage) : numPages;
+
+  for (let i = start; i <= end; i++) {
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale: 2.0 }); // Scale up for better quality
     const canvas = document.createElement('canvas');
@@ -24,15 +34,26 @@ export const convertPdfToImages = async (file: File): Promise<string[]> => {
     canvas.height = viewport.height;
     canvas.width = viewport.width;
 
+    // Cast to any to avoid type error: Property 'canvas' is missing in type ... but required in type 'RenderParameters'.
+    // This is likely a type definition issue in the used version of pdfjs-dist.
     await page.render({
       canvasContext: context,
       viewport: viewport,
-    }).promise;
+    } as any).promise;
 
     images.push(canvas.toDataURL('image/jpeg', 0.95));
   }
 
   return images;
+};
+
+export const convertFileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 };
 
 export const generatePdfFromImages = (images: string[]): Blob => {

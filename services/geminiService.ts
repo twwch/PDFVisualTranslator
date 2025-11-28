@@ -1,8 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
+import { TokenUsage } from "../types";
 
 // We strictly use the model name requested for "Nano Banana Pro" functionality which is mapped to gemini-3-pro-image-preview
 // as per the instructions for "High-Quality Image Generation and Editing Tasks".
 const MODEL_NAME = 'gemini-3-pro-image-preview';
+
+// Estimated Pricing for Pro Tier (Preview rates or standard Pro rates)
+// Input: $1.25 / 1 million tokens
+// Output: $5.00 / 1 million tokens
+const PRICE_PER_1M_INPUT = 1.25;
+const PRICE_PER_1M_OUTPUT = 5.00;
 
 const SUPPORTED_ASPECT_RATIOS = [
   { label: "1:1", value: 1.0 },
@@ -39,7 +46,7 @@ const getImageDimensions = (base64: string): Promise<{ width: number; height: nu
 export const translateImage = async (
   base64Image: string,
   targetLanguage: string
-): Promise<string> => {
+): Promise<{ image: string; usage: TokenUsage }> => {
   // Ensure API key is selected via the window.aistudio flow before calling this
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
@@ -57,24 +64,36 @@ export const translateImage = async (
 
   const prompt = `
     Role: You are an expert translator and professional graphic designer specializing in document localization.
-    Task: Translate the text in the provided image into ${targetLanguage}.
+    Task: Translate the text in the provided image into ${targetLanguage}, replacing the original text while preserving the visual layout and background exactly.
 
-    *** TRANSLATION QUALITY STANDARDS ***
-    1. **Professional & Native**: Use formal, high-quality, native-level phrasing suitable for professional documents.
-    2. **Context Aware**: Accurately handle technical terminology, idioms, and nuances. 
-    3. **Natural Flow**: Avoid literal word-for-word translation; prioritize the natural flow and readability of the target language.
+    *** PRIMARY DIRECTIVE: TRANSLATE EVERYTHING ***
+    You must translate **ALL** text found in the image. This specifically includes:
+    - Main headings and body text.
+    - **Small text, fine print, and footnotes** (CRITICAL: Do not ignore tiny fonts).
+    - Labels inside charts, graphs, and diagrams.
+    - Floating UI elements, page numbers, or captions.
+    - Text inside logos (unless it is a brand name).
 
-    *** CRITICAL VISUAL INSTRUCTIONS ***
-    1. **EXACT COLOR MATCHING**: You MUST strictly replicate the font colors of the original text. 
-       - If the original header is Red, the translated header MUST be Red.
-       - If text is White on a Dark Blue background, keep it White on Dark Blue.
-       - Do NOT default to black text unless the original is black.
-    2. **LAYOUT INTEGRITY**: 
-       - Maintain the exact position, font size, alignment, and font weight (bold/italic) of the original elements.
-       - The translated document structure must be indistinguishable from the original.
-    3. **SEAMLESS INTEGRATION**: The translated text should look like it was originally printed on the document.
+    *** EXCEPTION: PROPER NOUNS ***
+    Do NOT translate specific proper nouns (Brand names, Company names, Model numbers, Personal Names) unless they have widely accepted localized names. Keep these in the original language.
 
-    Output: A single high-quality image of the translated page. Do not add any text or explanations.
+    *** VISUAL PRESERVATION RULES (CRITICAL) ***
+    1. **BACKGROUND INTEGRITY**: 
+       - When replacing text, you MUST reconstruct the background behind the letters.
+       - **NEVER** place translated text inside a white box, solid colored block, or overlay unless it exists in the original.
+       - The background must appear seamless and original.
+    2. **FONT MATCHING**: 
+       - Match the original font color EXACTLY.
+       - Match the font size, weight (boldness), and style (serif/sans-serif).
+       - For small text, ensure the translated text remains legible but keeps the original scale.
+    3. **LAYOUT**: 
+       - Keep strict alignment. The translated text must occupy the exact same spatial area.
+       - Do not stretch or distort the image dimensions.
+
+    *** OUTPUT FORMAT ***
+    Return ONLY the single high-quality image of the translated page. 
+    DO NOT output any text, Markdown, JSON, or explanations. 
+    Just the image.
   `;
 
   try {
@@ -102,12 +121,33 @@ export const translateImage = async (
       }
     });
 
+    // Parse usage
+    const usageMetadata = response.usageMetadata;
+    const inputTokens = usageMetadata?.promptTokenCount || 0;
+    const outputTokens = usageMetadata?.candidatesTokenCount || 0;
+    const totalTokens = usageMetadata?.totalTokenCount || 0;
+    
+    // Calculate estimated cost
+    const inputCost = (inputTokens / 1_000_000) * PRICE_PER_1M_INPUT;
+    const outputCost = (outputTokens / 1_000_000) * PRICE_PER_1M_OUTPUT;
+    const estimatedCost = inputCost + outputCost;
+
+    const usage: TokenUsage = {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        estimatedCost
+    };
+
     // Parse response for image
     const parts = response.candidates?.[0]?.content?.parts;
     if (parts) {
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
-          return `data:image/png;base64,${part.inlineData.data}`;
+          return {
+              image: `data:image/png;base64,${part.inlineData.data}`,
+              usage
+          };
         }
       }
     }

@@ -13,12 +13,20 @@ export enum PageStatus {
   ERROR = 'ERROR'
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+}
+
 export interface PageData {
   pageNumber: number;
   originalImage: string; // Base64 data URL
   translatedImage?: string; // Base64 data URL
   status: PageStatus;
   errorMessage?: string;
+  usage?: TokenUsage;
 }
 
 export const SUPPORTED_LANGUAGES = [
