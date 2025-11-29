@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet } from 'lucide-react';
+import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw } from 'lucide-react';
 import { PageData, PageStatus, ProcessingStatus } from './types';
 import { convertPdfToImages, convertFileToBase64, generatePdfFromImages, generateComparisonPdf, getPdfPageCount } from './services/pdfService';
 import { translateImage } from './services/geminiService';
@@ -186,6 +186,53 @@ const App: React.FC = () => {
     setAppStatus(ProcessingStatus.COMPLETED);
   }, [pages, targetLanguage, apiKeyReady]);
 
+  const handleRetryFailed = async () => {
+    if (!targetLanguage) {
+        setGlobalError("Please select a target language.");
+        return;
+    }
+    if (!apiKeyReady) {
+        setGlobalError("Please select an API Key first.");
+        return;
+    }
+
+    setAppStatus(ProcessingStatus.TRANSLATING);
+    setGlobalError(null);
+
+    // Filter only failed pages
+    const failedPages = pages.filter(p => p.status === PageStatus.ERROR);
+    
+    for (const page of failedPages) {
+        // Update state to translating
+        setPages(prev => prev.map(p => 
+            p.pageNumber === page.pageNumber ? { ...p, status: PageStatus.TRANSLATING, errorMessage: undefined } : p
+        ));
+
+        try {
+            const result = await translateImage(page.originalImage, targetLanguage);
+            
+            setPages(prev => prev.map(p => 
+                p.pageNumber === page.pageNumber ? { 
+                    ...p, 
+                    translatedImage: result.image, 
+                    usage: result.usage,
+                    status: PageStatus.DONE 
+                } : p
+            ));
+        } catch (error: any) {
+            setPages(prev => prev.map(p => 
+                p.pageNumber === page.pageNumber ? { 
+                    ...p, 
+                    status: PageStatus.ERROR, 
+                    errorMessage: error.message || "Retry failed" 
+                } : p
+            ));
+        }
+    }
+
+    setAppStatus(ProcessingStatus.COMPLETED);
+  };
+
   const handleRetryPage = async (pageNumber: number) => {
     if (!targetLanguage) {
         setGlobalError("Please select a target language.");
@@ -320,6 +367,10 @@ const App: React.FC = () => {
   // Calculate Aggregated Stats
   const totalTokens = pages.reduce((acc, p) => acc + (p.usage?.totalTokens || 0), 0);
   const totalCost = pages.reduce((acc, p) => acc + (p.usage?.estimatedCost || 0), 0);
+  const failedCount = pages.filter(p => p.status === PageStatus.ERROR).length;
+  const completedCount = pages.filter(p => p.status === PageStatus.DONE).length;
+  const isTranslating = appStatus === ProcessingStatus.TRANSLATING;
+  const hasPages = pages.length > 0;
 
   if (!apiKeyReady) {
     return (
@@ -347,10 +398,6 @@ const App: React.FC = () => {
       </div>
     );
   }
-
-  const completedCount = pages.filter(p => p.status === PageStatus.DONE).length;
-  const isTranslating = appStatus === ProcessingStatus.TRANSLATING;
-  const hasPages = pages.length > 0;
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 relative">
@@ -458,6 +505,18 @@ const App: React.FC = () => {
                 >
                     <Play size={18} />
                     <span className="hidden sm:inline">Start</span>
+                </button>
+            )}
+            
+            {/* Retry Failed Button */}
+            {hasPages && !isTranslating && failedCount > 0 && (
+                 <button
+                    onClick={handleRetryFailed}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium bg-red-600 text-white hover:bg-red-700 transition-colors shadow-sm"
+                    title="Retry all failed pages"
+                >
+                    <RotateCcw size={18} />
+                    <span className="hidden sm:inline">Retry Failed ({failedCount})</span>
                 </button>
             )}
 

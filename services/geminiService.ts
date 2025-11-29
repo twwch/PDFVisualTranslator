@@ -63,37 +63,24 @@ export const translateImage = async (
   const aspectRatio = getBestAspectRatio(width, height);
 
   const prompt = `
-    Role: You are an expert translator and professional graphic designer specializing in document localization.
-    Task: Translate the text in the provided image into ${targetLanguage}, replacing the original text while preserving the visual layout and background exactly.
+    Role: You are an expert translator and professional graphic designer.
+    Task: Translate the document image into ${targetLanguage} while maintaining absolute visual fidelity.
 
-    *** PRIMARY DIRECTIVE: TRANSLATE EVERYTHING ***
-    You must translate **ALL** text found in the image. This specifically includes:
-    - Main headings and body text.
-    - **Small text, fine print, and footnotes** (CRITICAL: Do not ignore tiny fonts).
-    - Labels inside charts, graphs, and diagrams.
-    - Floating UI elements, page numbers, or captions.
-    - Text inside logos (unless it is a brand name).
+    *** VISUAL & SPATIAL DIMENSIONS (PRIORITY 1) ***
+    1. **NO CROP / NO RESIZE**: The output image must represent the full page exactly as the original. **DO NOT CROP** headers, footers, page numbers, or margins.
+    2. **STRICT ALIGNMENT**: Text blocks must replace the original text at the **EXACT SAME COORDINATES**. Do not shift paragraphs up or down.
+    3. **FONT SCALING**: Do not change the font size relative to the page width. If the original text is small, the translated text must be small. Match the visual weight.
+    4. **NO STRETCHING**: Do not distort the aspect ratio of the text or images.
 
-    *** EXCEPTION: PROPER NOUNS ***
-    Do NOT translate specific proper nouns (Brand names, Company names, Model numbers, Personal Names) unless they have widely accepted localized names. Keep these in the original language.
+    *** TRANSLATION CONTENT (PRIORITY 2) ***
+    1. **TRANSLATE ALL TEXT**: Includes main body, sidebars, footnotes, tiny diagram labels, and page numbers.
+    2. **PROPER NOUNS**: Keep specific brand names (e.g., 'Sony', 'iPad') and model codes in original language.
 
-    *** VISUAL PRESERVATION RULES (CRITICAL) ***
-    1. **BACKGROUND INTEGRITY**: 
-       - When replacing text, you MUST reconstruct the background behind the letters.
-       - **NEVER** place translated text inside a white box, solid colored block, or overlay unless it exists in the original.
-       - The background must appear seamless and original.
-    2. **FONT MATCHING**: 
-       - Match the original font color EXACTLY.
-       - Match the font size, weight (boldness), and style (serif/sans-serif).
-       - For small text, ensure the translated text remains legible but keeps the original scale.
-    3. **LAYOUT**: 
-       - Keep strict alignment. The translated text must occupy the exact same spatial area.
-       - Do not stretch or distort the image dimensions.
+    *** DESIGN INTEGRITY (PRIORITY 3) ***
+    1. **BACKGROUND**: Reconstruct the background behind text perfectly. No white boxes or color blocks.
+    2. **COLOR**: Match font colors exactly.
 
-    *** OUTPUT FORMAT ***
-    Return ONLY the single high-quality image of the translated page. 
-    DO NOT output any text, Markdown, JSON, or explanations. 
-    Just the image.
+    Output ONLY the translated image.
   `;
 
   try {
@@ -115,7 +102,7 @@ export const translateImage = async (
       config: {
         // Nano Banana Pro / Gemini 3 Pro Image specific configs
         imageConfig: {
-            imageSize: "2K", // Requesting higher resolution for document readability
+            imageSize: "4K", // Requesting 4K resolution for maximum detail and dimensional accuracy
             aspectRatio: aspectRatio // Dynamic aspect ratio to match input
         }
       }
