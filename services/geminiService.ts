@@ -43,9 +43,20 @@ const getImageDimensions = (base64: string): Promise<{ width: number; height: nu
   });
 };
 
+// Utility for delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const translateImage = async (
   base64Image: string,
   targetLanguage: string
+): Promise<{ image: string; usage: TokenUsage }> => {
+  return translateImageWithRetry(base64Image, targetLanguage);
+};
+
+const translateImageWithRetry = async (
+  base64Image: string,
+  targetLanguage: string,
+  retries = 3
 ): Promise<{ image: string; usage: TokenUsage }> => {
   // Ensure API key is selected via the window.aistudio flow before calling this
   const apiKey = process.env.API_KEY;
@@ -62,25 +73,43 @@ export const translateImage = async (
   const { width, height } = await getImageDimensions(base64Image);
   const aspectRatio = getBestAspectRatio(width, height);
 
+  // Optimized Prompt with Specific Handling for Mixed Language Sources and Script Similarity
   const prompt = `
-    Role: You are an expert translator and professional graphic designer.
-    Task: Translate the document image into ${targetLanguage} while maintaining absolute visual fidelity.
+    Act as an expert professional translator and layout engineer.
+    Your goal is to create a pixel-perfect translated clone of the original image in ${targetLanguage}.
 
-    *** VISUAL & SPATIAL DIMENSIONS (PRIORITY 1) ***
-    1. **NO CROP / NO RESIZE**: The output image must represent the full page exactly as the original. **DO NOT CROP** headers, footers, page numbers, or margins.
-    2. **STRICT ALIGNMENT**: Text blocks must replace the original text at the **EXACT SAME COORDINATES**. Do not shift paragraphs up or down.
-    3. **FONT SCALING**: Do not change the font size relative to the page width. If the original text is small, the translated text must be small. Match the visual weight.
-    4. **NO STRETCHING**: Do not distort the aspect ratio of the text or images.
+    CRITICAL EXECUTION PILLARS:
 
-    *** TRANSLATION CONTENT (PRIORITY 2) ***
-    1. **TRANSLATE ALL TEXT**: Includes main body, sidebars, footnotes, tiny diagram labels, and page numbers.
-    2. **PROPER NOUNS**: Keep specific brand names (e.g., 'Sony', 'iPad') and model codes in original language.
+    1. PRESERVE VISUAL IDENTITY (IMAGES & DIAGRAMS):
+       - DO NOT ALTER NON-TEXT ELEMENTS. Photos, diagrams, logos, lines, and textures must look EXACTLY like the original.
+       - Do NOT "redraw" or "simplify" charts or images. They must be preserved pixel-for-pixel unless they contain text labels that need translation.
+       - If a part of the image contains no text, IT MUST REMAIN UNCHANGED.
 
-    *** DESIGN INTEGRITY (PRIORITY 3) ***
-    1. **BACKGROUND**: Reconstruct the background behind text perfectly. No white boxes or color blocks.
-    2. **COLOR**: Match font colors exactly.
+    2. EXACT STRUCTURE & WHITESPACE:
+       - PRESERVE MARGINS AND GAPS: If the original page has large empty spaces (e.g., is only half-full), the output MUST have the exact same empty spaces.
+       - DO NOT REFLOW OR CENTER: Do not move text blocks to the center if they were top-aligned. Keep them anchored to their original coordinates.
+       - SHORT SECTIONS: Short paragraphs or lists must maintain their original line breaks and visual density. Do not stretch them.
 
-    Output ONLY the translated image.
+    3. FULL & FLUENT TRANSLATION:
+       - Translate ALL text into ${targetLanguage}. This includes Headers, Footers, Tables, Charts, and tiny Index numbers.
+       - MULTI-LANGUAGE HANDLING: If the source contains multiple languages (e.g., Japanese + English), translate EVERYTHING into ${targetLanguage}.
+       - NATIVE FLUENCY: The result must sound natural to a native speaker. Avoid robotic literal translations.
+
+    4. CRITICAL: SCRIPT CONVERSION (ESPECIALLY JAPANESE TO CHINESE):
+       - IF translating from Japanese to Chinese, you MUST convert vocabulary.
+       - DO NOT COPY KANJI just because it looks like Chinese.
+       - Example: '入力' MUST become '输入', '手紙' MUST become '信', '切手' MUST become '邮票', '削除' MUST become '删除'.
+       - Transliteration is FORBIDDEN. Meaning-based translation is MANDATORY.
+
+    5. VISUAL CLONING:
+       - Match Font Family, Size, Weight, and Color EXACTLY.
+       - Match Background Color EXACTLY.
+       - The result should look like the original document was printed in ${targetLanguage} from the start.
+
+    SUMMARY:
+    - Text: Translated to ${targetLanguage} (No Copying Kanji), Native Fluency, Exact Position.
+    - Images/Diagrams: UNCHANGED.
+    - Layout/Whitespace: UNCHANGED.
   `;
 
   try {
@@ -141,8 +170,22 @@ export const translateImage = async (
 
     throw new Error("No image data returned from Gemini.");
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Translation error:", error);
+
+    // Check for Resource Exhausted or Quota limits
+    const errorMessage = error.message || JSON.stringify(error);
+    const isQuotaError = errorMessage.includes("429") || 
+                         errorMessage.includes("403") || 
+                         errorMessage.includes("quota") || 
+                         errorMessage.includes("RESOURCE_EXHAUSTED");
+
+    if (isQuotaError && retries > 0) {
+      console.warn(`Quota error detected. Retrying in 10s... (${retries} attempts left)`);
+      await delay(10000); // Wait 10 seconds
+      return translateImageWithRetry(base64Image, targetLanguage, retries - 1);
+    }
+
     throw error;
   }
 };

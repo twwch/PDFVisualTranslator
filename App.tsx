@@ -67,7 +67,7 @@ const App: React.FC = () => {
     setAppStatus(ProcessingStatus.CONVERTING_PDF); 
 
     try {
-        const fileList = Array.from(files);
+        const fileList: File[] = Array.from(files);
         // Prioritize PDF if multiple files are selected alongside a PDF (edge case)
         const pdfFile = fileList.find(f => f.type === 'application/pdf');
 
@@ -274,7 +274,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDownload = (type: 'translated' | 'comparison') => {
+  const handleDownload = async (type: 'translated' | 'comparison') => {
     try {
         const finishedPages = pages.filter(p => p.status === PageStatus.DONE && p.translatedImage);
         if (finishedPages.length === 0) {
@@ -285,16 +285,18 @@ const App: React.FC = () => {
         let blob: Blob;
         let filename: string;
 
+        setAppStatus(ProcessingStatus.CONVERTING_PDF); // Re-use status to show processing
+
         if (type === 'comparison') {
              const comparisonData = finishedPages.map(p => ({
                  original: p.originalImage,
                  translated: p.translatedImage as string
              }));
-             blob = generateComparisonPdf(comparisonData);
+             blob = await generateComparisonPdf(comparisonData);
              filename = `translated_comparison_${targetLanguage}.pdf`;
         } else {
              const images = finishedPages.map(p => p.translatedImage as string);
-             blob = generatePdfFromImages(images);
+             blob = await generatePdfFromImages(images);
              filename = `translated_${targetLanguage}.pdf`;
         }
         
@@ -309,6 +311,8 @@ const App: React.FC = () => {
     } catch (e) {
         console.error(e);
         setGlobalError("Failed to generate PDF.");
+    } finally {
+        setAppStatus(ProcessingStatus.COMPLETED);
     }
   };
 

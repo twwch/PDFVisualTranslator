@@ -56,7 +56,34 @@ export const convertFileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-export const generatePdfFromImages = (images: string[]): Blob => {
+// Helper to compress image to JPEG before adding to PDF to save space
+const compressImageToJpeg = (base64: string, quality = 0.85): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                resolve(base64); // Fallback
+                return;
+            }
+            // Fill white background for transparent images
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = (e) => {
+             console.warn("Image compression failed, using original", e);
+             resolve(base64);
+        };
+        img.src = base64;
+    });
+};
+
+export const generatePdfFromImages = async (images: string[]): Promise<Blob> => {
   if (images.length === 0) {
     throw new Error("No images to generate PDF");
   }
@@ -71,7 +98,12 @@ export const generatePdfFromImages = (images: string[]): Blob => {
   const pdfWidth = pdf.internal.pageSize.getWidth();
   const pdfHeight = pdf.internal.pageSize.getHeight();
 
-  images.forEach((imgData, index) => {
+  for (let index = 0; index < images.length; index++) {
+    const rawImgData = images[index];
+    
+    // Compress image to JPEG to reduce PDF file size
+    const imgData = await compressImageToJpeg(rawImgData);
+
     if (index > 0) {
       pdf.addPage();
     }
@@ -96,12 +128,12 @@ export const generatePdfFromImages = (images: string[]): Blob => {
     const y = (pdfHeight - finalHeight) / 2;
 
     pdf.addImage(imgData, 'JPEG', x, y, finalWidth, finalHeight);
-  });
+  }
 
   return pdf.output('blob');
 };
 
-export const generateComparisonPdf = (pages: { original: string, translated: string }[]): Blob => {
+export const generateComparisonPdf = async (pages: { original: string, translated: string }[]): Promise<Blob> => {
   if (pages.length === 0) {
     throw new Error("No pages to generate PDF");
   }
@@ -123,7 +155,13 @@ export const generateComparisonPdf = (pages: { original: string, translated: str
   const halfWidth = (contentWidth - gap) / 2;
   const maxHeight = pageHeight - (2 * margin);
 
-  pages.forEach((pageData, index) => {
+  for (let index = 0; index < pages.length; index++) {
+    const pageData = pages[index];
+
+    // Compress images to JPEG to reduce PDF file size
+    const originalCompressed = await compressImageToJpeg(pageData.original);
+    const translatedCompressed = await compressImageToJpeg(pageData.translated);
+
     if (index > 0) {
       pdf.addPage();
     }
@@ -153,17 +191,17 @@ export const generateComparisonPdf = (pages: { original: string, translated: str
     };
 
     // Draw Original Image on Left
-    drawImageInBox(pageData.original, margin, margin, halfWidth, maxHeight);
+    drawImageInBox(originalCompressed, margin, margin, halfWidth, maxHeight);
     
     // Draw Translated Image on Right
-    drawImageInBox(pageData.translated, margin + halfWidth + gap, margin, halfWidth, maxHeight);
+    drawImageInBox(translatedCompressed, margin + halfWidth + gap, margin, halfWidth, maxHeight);
     
     // Optional: Add small labels at the bottom if needed
     pdf.setFontSize(8);
     pdf.setTextColor(100);
     pdf.text("Original", margin, pageHeight - 5);
     pdf.text("Translated", margin + halfWidth + gap, pageHeight - 5);
-  });
+  }
 
   return pdf.output('blob');
 };
