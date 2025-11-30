@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw, ClipboardList, Loader2, ArrowRightLeft } from 'lucide-react';
-import { PageData, PageStatus, ProcessingStatus, SUPPORTED_LANGUAGES, SOURCE_LANGUAGES } from './types';
+import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw, ClipboardList, Loader2, ArrowRightLeft, Settings2 } from 'lucide-react';
+import { PageData, PageStatus, ProcessingStatus, SUPPORTED_LANGUAGES, SOURCE_LANGUAGES, TranslationMode } from './types';
 import { convertPdfToImages, convertFileToBase64, generatePdfFromImages, generateComparisonPdf, getPdfPageCount, generateEvaluationPdf } from './services/pdfService';
 import { translateImage, evaluateTranslation } from './services/geminiService';
 import PageCard from './components/PageCard';
@@ -12,6 +12,7 @@ const App: React.FC = () => {
   const [appStatus, setAppStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
   const [targetLanguage, setTargetLanguage] = useState<string>('');
   const [sourceLanguage, setSourceLanguage] = useState<string>('Auto (Detect)');
+  const [translationMode, setTranslationMode] = useState<TranslationMode>(TranslationMode.DIRECT);
   const [apiKeyReady, setApiKeyReady] = useState<boolean>(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   
@@ -163,7 +164,7 @@ const App: React.FC = () => {
         ));
 
         try {
-            const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage);
+            const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage, translationMode);
             
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
@@ -171,6 +172,7 @@ const App: React.FC = () => {
                     translatedImage: result.image, 
                     usage: result.usage,
                     promptUsed: result.promptUsed, // Store prompt
+                    extractedSegments: result.extractedSegments, // Store segments from Step 1
                     status: PageStatus.DONE,
                     isEvaluating: true 
                 } : p
@@ -204,7 +206,7 @@ const App: React.FC = () => {
     }
 
     setAppStatus(ProcessingStatus.COMPLETED);
-  }, [pages, targetLanguage, sourceLanguage, apiKeyReady]);
+  }, [pages, targetLanguage, sourceLanguage, translationMode, apiKeyReady]);
 
   const handleRetryFailed = async () => {
     if (!targetLanguage) {
@@ -224,7 +226,7 @@ const App: React.FC = () => {
     
     for (const page of failedPages) {
         
-        // Retrieve suggestions from previous attempt if available (even if it was an error state, unlikely but safe)
+        // Retrieve suggestions from previous attempt if available
         const previousSuggestions = page.evaluation?.suggestions;
 
         // Update state to translating
@@ -233,7 +235,7 @@ const App: React.FC = () => {
         ));
 
         try {
-            const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage, previousSuggestions);
+            const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage, translationMode, previousSuggestions);
             
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
@@ -241,6 +243,7 @@ const App: React.FC = () => {
                     translatedImage: result.image, 
                     usage: result.usage,
                     promptUsed: result.promptUsed, // Store prompt
+                    extractedSegments: result.extractedSegments, // Store segments
                     status: PageStatus.DONE,
                     isEvaluating: true
                 } : p
@@ -292,7 +295,7 @@ const App: React.FC = () => {
     ));
 
     try {
-        const result = await translateImage(pageToRetry.originalImage, targetLanguage, sourceLanguage, previousSuggestions);
+        const result = await translateImage(pageToRetry.originalImage, targetLanguage, sourceLanguage, translationMode, previousSuggestions);
         
         setPages(prev => prev.map(p => 
             p.pageNumber === pageNumber ? { 
@@ -300,6 +303,7 @@ const App: React.FC = () => {
                 translatedImage: result.image, 
                 usage: result.usage,
                 promptUsed: result.promptUsed, // Store prompt
+                extractedSegments: result.extractedSegments, // Store segments
                 status: PageStatus.DONE,
                 isEvaluating: true
             } : p
@@ -596,6 +600,19 @@ const App: React.FC = () => {
                             onSelect={setTargetLanguage}
                             disabled={isTranslating} 
                         />
+                    </div>
+                    {/* Translation Engine Selector */}
+                    <div className="hidden lg:flex items-center space-x-2 border-l border-slate-200 pl-4 ml-2">
+                        <label className="text-sm font-medium text-slate-700">Engine:</label>
+                        <select
+                            value={translationMode}
+                            onChange={(e) => setTranslationMode(e.target.value as TranslationMode)}
+                            disabled={isTranslating}
+                            className="block rounded-md border-slate-300 bg-white py-2 pl-2 pr-8 text-sm focus:border-indigo-500 focus:ring-indigo-500 shadow-sm border max-w-[150px]"
+                        >
+                            <option value={TranslationMode.DIRECT}>Direct (Fast)</option>
+                            <option value={TranslationMode.TWO_STEP}>Precision (Slow)</option>
+                        </select>
                     </div>
                 </>
             )}

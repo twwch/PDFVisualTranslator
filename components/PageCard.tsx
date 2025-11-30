@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { PageData, PageStatus } from '../types';
-import { Loader2, AlertCircle, ArrowRight, Zap, Coins, RotateCcw, Star, X, MessageSquareText, Copy } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowRight, Zap, Coins, RotateCcw, Star, X, MessageSquareText, Copy, FileText } from 'lucide-react';
 
 interface PageCardProps {
   page: PageData;
@@ -10,6 +10,7 @@ interface PageCardProps {
 const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
   const [showScoreModal, setShowScoreModal] = useState(false);
   const [showPromptModal, setShowPromptModal] = useState(false);
+  const [showSegmentsModal, setShowSegmentsModal] = useState(false);
 
   // Helper to get color based on score
   const getScoreColor = (score: number) => {
@@ -30,6 +31,12 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
       }
   };
 
+  const handleCopySegments = () => {
+      if (page.extractedSegments) {
+          navigator.clipboard.writeText(page.extractedSegments);
+      }
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible flex flex-col h-full relative z-0">
       <div className="p-3 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
@@ -47,6 +54,17 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
                         ${page.usage.estimatedCost.toFixed(4)}
                     </span>
                 </div>
+            )}
+
+            {/* View Segments Button (Only for Two-Step Mode results) */}
+            {page.extractedSegments && (
+                <button
+                    onClick={() => setShowSegmentsModal(true)}
+                    className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-indigo-600 transition-colors"
+                    title="View Extracted Translation Segments"
+                >
+                    <FileText size={16} />
+                </button>
             )}
 
             {/* Show Prompt Button */}
@@ -166,6 +184,41 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
           <div className="sm:hidden px-3 py-2 bg-slate-50 border-t border-slate-200 flex justify-between text-xs text-slate-500">
                <span>Tokens: {page.usage.totalTokens.toLocaleString()}</span>
                <span>Cost: ${page.usage.estimatedCost.toFixed(4)}</span>
+          </div>
+      )}
+
+      {/* Segments Modal */}
+      {showSegmentsModal && page.extractedSegments && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+                   <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                        <div className="flex items-center gap-2">
+                             <FileText size={18} className="text-slate-600"/>
+                             <h3 className="font-bold text-slate-800">Extracted Text Segments (Step 1)</h3>
+                        </div>
+                        <div className="flex gap-2">
+                             <button onClick={handleCopySegments} className="text-slate-500 hover:text-indigo-600 transition-colors p-1" title="Copy">
+                                 <Copy size={18} />
+                             </button>
+                             <button onClick={() => setShowSegmentsModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors p-1">
+                                 <X size={20} />
+                             </button>
+                        </div>
+                   </div>
+                   <div className="p-0 overflow-hidden flex-grow bg-slate-50">
+                       <pre className="w-full h-full p-4 text-xs sm:text-sm text-slate-700 font-mono overflow-auto whitespace-pre-wrap">
+                           {page.extractedSegments}
+                       </pre>
+                   </div>
+                   <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex justify-end">
+                      <button 
+                          onClick={() => setShowSegmentsModal(false)}
+                          className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                          Close
+                      </button>
+                  </div>
+              </div>
           </div>
       )}
 

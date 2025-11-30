@@ -13,6 +13,11 @@ export enum PageStatus {
   ERROR = 'ERROR'
 }
 
+export enum TranslationMode {
+  DIRECT = 'DIRECT', // Existing: One-shot image to image
+  TWO_STEP = 'TWO_STEP' // New: Text Extraction -> Replacement
+}
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -46,6 +51,7 @@ export interface PageData {
   evaluation?: EvaluationResult;
   isEvaluating?: boolean;
   promptUsed?: string; // The specific prompt used for this translation
+  extractedSegments?: string; // The raw text segments extracted in Step 1 of Two-Step mode
 }
 
 export const SUPPORTED_LANGUAGES = [
