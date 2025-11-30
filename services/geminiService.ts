@@ -1,9 +1,10 @@
-import { GoogleGenAI } from "@google/genai";
-import { TokenUsage } from "../types";
+import { GoogleGenAI, Schema, Type } from "@google/genai";
+import { TokenUsage, EvaluationResult } from "../types";
 
 // We strictly use the model name requested for "Nano Banana Pro" functionality which is mapped to gemini-3-pro-image-preview
 // as per the instructions for "High-Quality Image Generation and Editing Tasks".
 const MODEL_NAME = 'gemini-3-pro-image-preview';
+const EVAL_MODEL_NAME = 'gemini-3-pro-preview'; // For multimodal evaluation
 
 // Estimated Pricing for Pro Tier (Preview rates or standard Pro rates)
 // Input: $1.25 / 1 million tokens
@@ -48,16 +49,20 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const translateImage = async (
   base64Image: string,
-  targetLanguage: string
-): Promise<{ image: string; usage: TokenUsage }> => {
-  return translateImageWithRetry(base64Image, targetLanguage);
+  targetLanguage: string,
+  sourceLanguage: string = 'Auto (Detect)',
+  previousSuggestions?: string // Optional feedback from previous attempt
+): Promise<{ image: string; usage: TokenUsage; promptUsed: string }> => {
+  return translateImageWithRetry(base64Image, targetLanguage, sourceLanguage, 3, previousSuggestions);
 };
 
 const translateImageWithRetry = async (
   base64Image: string,
   targetLanguage: string,
-  retries = 3
-): Promise<{ image: string; usage: TokenUsage }> => {
+  sourceLanguage: string,
+  retries = 3,
+  previousSuggestions?: string
+): Promise<{ image: string; usage: TokenUsage; promptUsed: string }> => {
   // Ensure API key is selected via the window.aistudio flow before calling this
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
@@ -73,44 +78,72 @@ const translateImageWithRetry = async (
   const { width, height } = await getImageDimensions(base64Image);
   const aspectRatio = getBestAspectRatio(width, height);
 
-  // Optimized Prompt with Specific Handling for Mixed Language Sources and Script Similarity
-  const prompt = `
-    Act as an expert professional translator and layout engineer.
-    Your goal is to create a pixel-perfect translated clone of the original image in ${targetLanguage}.
+  // Detect if target is Chinese to enable Aggressive Kanji Replacement mode
+  const isChineseTarget = targetLanguage.toLowerCase().includes('chinese') || 
+                          targetLanguage.includes('中文') || 
+                          targetLanguage.includes('zh');
 
-    CRITICAL EXECUTION PILLARS:
+  // Optimized Prompt for Visual Translation
+  let prompt = `**Role:** Elite Localization Engine (Visual Replacement Specialist)
+**Task:** Completely ERASE source text and RE-RENDER it in: "${targetLanguage}".
 
-    1. PRESERVE VISUAL IDENTITY (IMAGES & DIAGRAMS):
-       - DO NOT ALTER NON-TEXT ELEMENTS. Photos, diagrams, logos, lines, and textures must look EXACTLY like the original.
-       - Do NOT "redraw" or "simplify" charts or images. They must be preserved pixel-for-pixel unless they contain text labels that need translation.
-       - If a part of the image contains no text, IT MUST REMAIN UNCHANGED.
+**PRIMARY DIRECTIVE: SEMANTIC RECONSTRUCTION (NOT COPYING)**
+You are NOT copying pixels. You are reading the meaning and generating BRAND NEW TEXT in the target language.
+The output must look like a document originally created in "${targetLanguage}".
 
-    2. EXACT STRUCTURE & WHITESPACE:
-       - PRESERVE MARGINS AND GAPS: If the original page has large empty spaces (e.g., is only half-full), the output MUST have the exact same empty spaces.
-       - DO NOT REFLOW OR CENTER: Do not move text blocks to the center if they were top-aligned. Keep them anchored to their original coordinates.
-       - SHORT SECTIONS: Short paragraphs or lists must maintain their original line breaks and visual density. Do not stretch them.
+**1. STRICT LANGUAGE ENFORCEMENT (ZERO TOLERANCE):**
+   - **Source Language:** ${sourceLanguage}
+   - **Target Language:** The output text must be 100% "${targetLanguage}".
+   - **Foreign Script Ban:** DO NOT output a single character that does not belong to the target language script.
+   - **Mixed Source Handling:** Even if the source has English, Japanese, and Korean, *everything* must become "${targetLanguage}".
 
-    3. FULL & FLUENT TRANSLATION:
-       - Translate ALL text into ${targetLanguage}. This includes Headers, Footers, Tables, Charts, and tiny Index numbers.
-       - MULTI-LANGUAGE HANDLING: If the source contains multiple languages (e.g., Japanese + English), translate EVERYTHING into ${targetLanguage}.
-       - NATIVE FLUENCY: The result must sound natural to a native speaker. Avoid robotic literal translations.
+${isChineseTarget ? `
+**2. CRITICAL: JAPANESE TO CHINESE CORRECTION PROTOCOL (OVERRIDE VISUALS)**
+   - **THE PROBLEM:** The source image contains Japanese Kanji/Kana which look similar to Chinese but are WRONG.
+   - **THE FIX:** You must REPLACE them with Standard Simplified Chinese Hanzi.
+   - **DO NOT MIMIC THE SHAPE:** The original font uses Japanese glyph variants. You MUST use Standard Simplified Chinese glyphs.
+   - **FORBIDDEN CHARACTERS (FATAL ERROR):** 
+     - No Hiragana (あ, い, う...) -> Must be translated (e.g., の -> 的).
+     - No Katakana (ア, イ, ウ...) -> Must be translated (e.g., コンクリート -> 混凝土).
+     - No Japanese-only Kanji (込, 畑, 峠...).
+     - If you draw a 'の' (no) instead of '的' (de), the task is FAILED.
+   - **GRAMMAR & VOCABULARY:** 
+     - Source: "分析を行った" -> Target: "进行了分析" (Rephrase naturally).
+     - Source: "〜について" -> Target: "关于〜".
+     - Source: "無料" -> Target: "免费".
+     - Source: "手紙" -> Target: "信件".
+` : ''}
 
-    4. CRITICAL: SCRIPT CONVERSION (ESPECIALLY JAPANESE TO CHINESE):
-       - IF translating from Japanese to Chinese, you MUST convert vocabulary.
-       - DO NOT COPY KANJI just because it looks like Chinese.
-       - Example: '入力' MUST become '输入', '手紙' MUST become '信', '切手' MUST become '邮票', '削除' MUST become '删除'.
-       - Transliteration is FORBIDDEN. Meaning-based translation is MANDATORY.
+**3. VISUAL FIDELITY & FORMAT:**
+   - **Positioning:** The new text must occupy the *exact* same coordinate space as the old text.
+   - **Vertical Spacing (CRITICAL):** If the original content ends halfway down the page (e.g., a half-page document), the output MUST END at the exact same vertical position. DO NOT STRETCH the content to fill the bottom of the page. Leave the bottom half blank if the original is blank.
+   - **Style:** Match the font weight (Bold/Regular), size, and color exactly.
+   - **Background:** Do not paint white boxes. The text must look printed on the original background.
+   - **Non-Text Elements:** Do NOT touch diagrams, photos, or lines. They must be pixel-perfect.
 
-    5. VISUAL CLONING:
-       - Match Font Family, Size, Weight, and Color EXACTLY.
-       - Match Background Color EXACTLY.
-       - The result should look like the original document was printed in ${targetLanguage} from the start.
+**4. COMPLETENESS:**
+   - Translate small labels on diagrams.
+   - Translate headers and footers.
+   - Translate table contents row by row.
+   - **Proper Nouns:** Only keep Model Numbers (e.g., "RX-78") or Global Brand Names (e.g., "Sony") in original alphanumeric text. Everything else gets translated.
 
-    SUMMARY:
-    - Text: Translated to ${targetLanguage} (No Copying Kanji), Native Fluency, Exact Position.
-    - Images/Diagrams: UNCHANGED.
-    - Layout/Whitespace: UNCHANGED.
+**Output:**
+- A single image.
+- Resolution: 4K (Pixel-Perfect).
+- Aspect Ratio: Match Original.
   `;
+
+  // Inject feedback loop if suggestions exist
+  if (previousSuggestions) {
+    prompt += `
+    
+    IMPORTANT - CORRECTION FROM PREVIOUS ATTEMPT:
+    The previous translation had the following issues which MUST be fixed in this attempt:
+    "${previousSuggestions}"
+    
+    Ensure you strictly address the feedback above.
+    `;
+  }
 
   try {
     const response = await ai.models.generateContent({
@@ -162,7 +195,8 @@ const translateImageWithRetry = async (
         if (part.inlineData && part.inlineData.data) {
           return {
               image: `data:image/png;base64,${part.inlineData.data}`,
-              usage
+              usage,
+              promptUsed: prompt
           };
         }
       }
@@ -179,13 +213,124 @@ const translateImageWithRetry = async (
                          errorMessage.includes("403") || 
                          errorMessage.includes("quota") || 
                          errorMessage.includes("RESOURCE_EXHAUSTED");
+    
+    // Check for 500 Internal Server Error (sometimes happens with complex image gen requests)
+    const isInternalError = errorMessage.includes("500") || errorMessage.includes("INTERNAL");
 
-    if (isQuotaError && retries > 0) {
-      console.warn(`Quota error detected. Retrying in 10s... (${retries} attempts left)`);
+    if ((isQuotaError || isInternalError) && retries > 0) {
+      console.warn(`API Error (${isQuotaError ? 'Quota' : 'Internal'}). Retrying in 10s... (${retries} attempts left)`);
       await delay(10000); // Wait 10 seconds
-      return translateImageWithRetry(base64Image, targetLanguage, retries - 1);
+      return translateImageWithRetry(base64Image, targetLanguage, sourceLanguage, retries - 1, previousSuggestions);
     }
 
     throw error;
+  }
+};
+
+export const evaluateTranslation = async (
+  originalImage: string,
+  translatedImage: string,
+  targetLanguage: string,
+  sourceLanguage: string = 'Auto (Detect)'
+): Promise<EvaluationResult> => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("API Key missing");
+
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const originalData = originalImage.split(',')[1];
+  const translatedData = translatedImage.split(',')[1];
+
+  const prompt = `
+    You are a professional Translation Quality Auditor. 
+    Compare the Original Image and the Translated Image.
+    
+    Context:
+    - Source Language: ${sourceLanguage}
+    - Target Language: ${targetLanguage}
+    
+    Evaluate the translation on a scale of 1 to 10 for the following 6 dimensions:
+    1. Accuracy: How accurately is the meaning preserved?
+    2. Fluency: Does the text sound natural and native-like in ${targetLanguage}?
+    3. Consistency: Are styles, fonts, and layouts consistent with the original?
+    4. Terminology: Is the technical or domain-specific terminology correct?
+    5. Completeness: Is ALL text translated? Are any parts missed? 
+       - CRITICAL: If target is Chinese (简体中文) but you see Japanese Hiragana/Katakana or untranslated Kanji, this score MUST be below 5.
+    6. Format Preservation: How well are the image dimensions, non-text elements, and layout preserved? 
+       - Check specifically if half-page content was incorrectly stretched to fill the full page.
+
+    OUTPUT REQUIREMENTS:
+    - The 'reason' and 'suggestions' MUST be written in SIMPLIFIED CHINESE (简体中文).
+    - If you detect untranslated foreign script (e.g., Japanese left in a Chinese translation), point it out explicitly in the suggestions.
+    - Provide concrete suggestions for improvement if the score is low.
+  `;
+
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      scores: {
+        type: Type.OBJECT,
+        properties: {
+          accuracy: { type: Type.NUMBER },
+          fluency: { type: Type.NUMBER },
+          consistency: { type: Type.NUMBER },
+          terminology: { type: Type.NUMBER },
+          completeness: { type: Type.NUMBER },
+          formatPreservation: { type: Type.NUMBER },
+        },
+        required: ["accuracy", "fluency", "consistency", "terminology", "completeness", "formatPreservation"],
+      },
+      reason: { type: Type.STRING },
+      suggestions: { type: Type.STRING },
+    },
+    required: ["scores", "reason", "suggestions"],
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: EVAL_MODEL_NAME,
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: 'image/jpeg', data: originalData } },
+          { inlineData: { mimeType: 'image/jpeg', data: translatedData } },
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
+    });
+
+    const jsonText = response.text || "{}";
+    const result = JSON.parse(jsonText);
+    
+    // Calculate average of 6 dimensions
+    const scores = result.scores;
+    const avg = (
+        scores.accuracy + 
+        scores.fluency + 
+        scores.consistency + 
+        scores.terminology + 
+        scores.completeness + 
+        scores.formatPreservation
+    ) / 6;
+
+    return {
+      scores: scores,
+      averageScore: parseFloat(avg.toFixed(1)),
+      reason: result.reason,
+      suggestions: result.suggestions
+    };
+
+  } catch (error) {
+    console.error("Evaluation failed", error);
+    // Return a fallback so we don't crash the app
+    return {
+      scores: { accuracy: 0, fluency: 0, consistency: 0, terminology: 0, completeness: 0, formatPreservation: 0 },
+      averageScore: 0,
+      reason: "评估服务暂时不可用。",
+      suggestions: "请稍后重试。"
+    };
   }
 };

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw } from 'lucide-react';
-import { PageData, PageStatus, ProcessingStatus } from './types';
-import { convertPdfToImages, convertFileToBase64, generatePdfFromImages, generateComparisonPdf, getPdfPageCount } from './services/pdfService';
-import { translateImage } from './services/geminiService';
+import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw, ClipboardList, Loader2, ArrowRightLeft } from 'lucide-react';
+import { PageData, PageStatus, ProcessingStatus, SUPPORTED_LANGUAGES, SOURCE_LANGUAGES } from './types';
+import { convertPdfToImages, convertFileToBase64, generatePdfFromImages, generateComparisonPdf, getPdfPageCount, generateEvaluationPdf } from './services/pdfService';
+import { translateImage, evaluateTranslation } from './services/geminiService';
 import PageCard from './components/PageCard';
 import ProgressBar from './components/ProgressBar';
 import LanguageSelector from './components/LanguageSelector';
@@ -11,6 +11,7 @@ const App: React.FC = () => {
   const [pages, setPages] = useState<PageData[]>([]);
   const [appStatus, setAppStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
   const [targetLanguage, setTargetLanguage] = useState<string>('');
+  const [sourceLanguage, setSourceLanguage] = useState<string>('Auto (Detect)');
   const [apiKeyReady, setApiKeyReady] = useState<boolean>(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   
@@ -162,16 +163,35 @@ const App: React.FC = () => {
         ));
 
         try {
-            const result = await translateImage(page.originalImage, targetLanguage);
+            const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage);
             
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
                     ...p, 
                     translatedImage: result.image, 
                     usage: result.usage,
-                    status: PageStatus.DONE 
+                    promptUsed: result.promptUsed, // Store prompt
+                    status: PageStatus.DONE,
+                    isEvaluating: true 
                 } : p
             ));
+
+            // Async Evaluation (Non-blocking but updates state when done)
+            evaluateTranslation(page.originalImage, result.image, targetLanguage, sourceLanguage).then(evalResult => {
+                 setPages(prev => prev.map(p => 
+                    p.pageNumber === page.pageNumber ? { 
+                        ...p, 
+                        evaluation: evalResult,
+                        isEvaluating: false
+                    } : p
+                ));
+            }).catch(e => {
+                console.error("Evaluation error", e);
+                setPages(prev => prev.map(p => 
+                    p.pageNumber === page.pageNumber ? { ...p, isEvaluating: false } : p
+                ));
+            });
+
         } catch (error: any) {
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
@@ -184,7 +204,7 @@ const App: React.FC = () => {
     }
 
     setAppStatus(ProcessingStatus.COMPLETED);
-  }, [pages, targetLanguage, apiKeyReady]);
+  }, [pages, targetLanguage, sourceLanguage, apiKeyReady]);
 
   const handleRetryFailed = async () => {
     if (!targetLanguage) {
@@ -203,22 +223,39 @@ const App: React.FC = () => {
     const failedPages = pages.filter(p => p.status === PageStatus.ERROR);
     
     for (const page of failedPages) {
+        
+        // Retrieve suggestions from previous attempt if available (even if it was an error state, unlikely but safe)
+        const previousSuggestions = page.evaluation?.suggestions;
+
         // Update state to translating
         setPages(prev => prev.map(p => 
             p.pageNumber === page.pageNumber ? { ...p, status: PageStatus.TRANSLATING, errorMessage: undefined } : p
         ));
 
         try {
-            const result = await translateImage(page.originalImage, targetLanguage);
+            const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage, previousSuggestions);
             
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
                     ...p, 
                     translatedImage: result.image, 
                     usage: result.usage,
-                    status: PageStatus.DONE 
+                    promptUsed: result.promptUsed, // Store prompt
+                    status: PageStatus.DONE,
+                    isEvaluating: true
                 } : p
             ));
+
+            evaluateTranslation(page.originalImage, result.image, targetLanguage, sourceLanguage).then(evalResult => {
+                 setPages(prev => prev.map(p => 
+                    p.pageNumber === page.pageNumber ? { 
+                        ...p, 
+                        evaluation: evalResult,
+                        isEvaluating: false
+                    } : p
+                ));
+            });
+
         } catch (error: any) {
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
@@ -243,26 +280,41 @@ const App: React.FC = () => {
         return;
     }
 
+    // Find the page data to get previous suggestions
+    const pageToRetry = pages.find(p => p.pageNumber === pageNumber);
+    if (!pageToRetry) return;
+    
+    const previousSuggestions = pageToRetry.evaluation?.suggestions;
+
     // Set specific page to translating
     setPages(prev => prev.map(p => 
         p.pageNumber === pageNumber ? { ...p, status: PageStatus.TRANSLATING, errorMessage: undefined } : p
     ));
 
-    // Find the page data
-    const pageToRetry = pages.find(p => p.pageNumber === pageNumber);
-    if (!pageToRetry) return;
-
     try {
-        const result = await translateImage(pageToRetry.originalImage, targetLanguage);
+        const result = await translateImage(pageToRetry.originalImage, targetLanguage, sourceLanguage, previousSuggestions);
         
         setPages(prev => prev.map(p => 
             p.pageNumber === pageNumber ? { 
                 ...p, 
                 translatedImage: result.image, 
                 usage: result.usage,
-                status: PageStatus.DONE 
+                promptUsed: result.promptUsed, // Store prompt
+                status: PageStatus.DONE,
+                isEvaluating: true
             } : p
         ));
+
+        evaluateTranslation(pageToRetry.originalImage, result.image, targetLanguage, sourceLanguage).then(evalResult => {
+                setPages(prev => prev.map(p => 
+                p.pageNumber === pageNumber ? { 
+                    ...p, 
+                    evaluation: evalResult,
+                    isEvaluating: false
+                } : p
+            ));
+        });
+
     } catch (error: any) {
         setPages(prev => prev.map(p => 
             p.pageNumber === pageNumber ? { 
@@ -359,6 +411,33 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDownloadEvaluationReport = async () => {
+    try {
+        const evaluatedPages = pages.filter(p => p.status === PageStatus.DONE && p.evaluation);
+        if (evaluatedPages.length === 0) {
+            alert("No evaluation data available yet.");
+            return;
+        }
+
+        setAppStatus(ProcessingStatus.CONVERTING_PDF); // Show loading state
+
+        const blob = await generateEvaluationPdf(evaluatedPages);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `translation_evaluation_report.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error(e);
+        setGlobalError("Failed to generate Evaluation Report PDF.");
+    } finally {
+        setAppStatus(ProcessingStatus.COMPLETED);
+    }
+  };
+
   const handleReset = () => {
       if (window.confirm("Are you sure you want to clear all pages and start over?")) {
           setPages([]);
@@ -374,6 +453,7 @@ const App: React.FC = () => {
   const failedCount = pages.filter(p => p.status === PageStatus.ERROR).length;
   const completedCount = pages.filter(p => p.status === PageStatus.DONE).length;
   const isTranslating = appStatus === ProcessingStatus.TRANSLATING;
+  const isConverting = appStatus === ProcessingStatus.CONVERTING_PDF;
   const hasPages = pages.length > 0;
 
   if (!apiKeyReady) {
@@ -415,7 +495,7 @@ const App: React.FC = () => {
                           <h3 className="text-xl font-bold text-slate-900">Import PDF</h3>
                           <p className="text-sm text-slate-500">{importConfig.file.name}</p>
                       </div>
-                      <button onClick={handleCancelImport} className="text-slate-400 hover:text-slate-600">
+                      <button onClick={handleCancelImport} disabled={isConverting} className="text-slate-400 hover:text-slate-600 disabled:opacity-50">
                           <X size={24} />
                       </button>
                   </div>
@@ -435,11 +515,12 @@ const App: React.FC = () => {
                                   min={1} 
                                   max={importRange.end}
                                   value={importRange.start}
+                                  disabled={isConverting}
                                   onChange={(e) => {
                                       const val = parseInt(e.target.value);
                                       if (!isNaN(val)) setImportRange(prev => ({ ...prev, start: Math.max(1, Math.min(val, prev.end)) }));
                                   }}
-                                  className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
+                                  className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border disabled:bg-slate-200"
                               />
                           </div>
                           <span className="text-slate-400 pt-5">-</span>
@@ -450,11 +531,12 @@ const App: React.FC = () => {
                                   min={importRange.start} 
                                   max={importConfig.totalPages}
                                   value={importRange.end}
+                                  disabled={isConverting}
                                   onChange={(e) => {
                                       const val = parseInt(e.target.value);
                                       if (!isNaN(val)) setImportRange(prev => ({ ...prev, end: Math.max(prev.start, Math.min(val, importConfig.totalPages)) }));
                                   }}
-                                  className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
+                                  className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border disabled:bg-slate-200"
                               />
                           </div>
                       </div>
@@ -463,15 +545,18 @@ const App: React.FC = () => {
                   <div className="flex gap-3">
                       <button 
                           onClick={handleCancelImport}
-                          className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 transition-colors"
+                          disabled={isConverting}
+                          className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                           Cancel
                       </button>
                       <button 
                           onClick={handleConfirmImport}
-                          className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+                          disabled={isConverting}
+                          className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                       >
-                          Import Pages
+                          {isConverting && <Loader2 size={16} className="animate-spin" />}
+                          {isConverting ? "Importing..." : "Import Pages"}
                       </button>
                   </div>
               </div>
@@ -490,13 +575,29 @@ const App: React.FC = () => {
           
           <div className="flex items-center gap-2 sm:gap-4">
             {hasPages && (
-                <div className="w-32 sm:w-auto">
-                    <LanguageSelector 
-                        selectedLanguage={targetLanguage} 
-                        onSelect={setTargetLanguage}
-                        disabled={isTranslating} 
-                    />
-                </div>
+                <>
+                    <div className="w-auto">
+                        <LanguageSelector 
+                            label="From:"
+                            selectedLanguage={sourceLanguage} 
+                            languages={SOURCE_LANGUAGES}
+                            onSelect={setSourceLanguage}
+                            disabled={isTranslating} 
+                        />
+                    </div>
+                    <div className="text-slate-400 hidden lg:block">
+                        <ArrowRightLeft size={16} />
+                    </div>
+                    <div className="w-auto">
+                        <LanguageSelector 
+                            label="To:"
+                            selectedLanguage={targetLanguage} 
+                            languages={SUPPORTED_LANGUAGES}
+                            onSelect={setTargetLanguage}
+                            disabled={isTranslating} 
+                        />
+                    </div>
+                </>
             )}
             
             {hasPages && !isTranslating && appStatus !== ProcessingStatus.COMPLETED && (
@@ -556,6 +657,14 @@ const App: React.FC = () => {
                     >
                         <FileSpreadsheet size={16} />
                         <span className="hidden lg:inline">Cost Report</span>
+                    </button>
+                    <button
+                        onClick={handleDownloadEvaluationReport}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-purple-600 text-white hover:bg-purple-700 transition-colors shadow-sm text-sm"
+                        title="Download Evaluation Report (PDF)"
+                    >
+                        <ClipboardList size={16} />
+                        <span className="hidden lg:inline">QA Report</span>
                     </button>
                 </div>
             )}
@@ -625,7 +734,7 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {appStatus === ProcessingStatus.CONVERTING_PDF && (
+        {appStatus === ProcessingStatus.CONVERTING_PDF && !importConfig && (
             <div className="mt-20 flex flex-col items-center justify-center">
                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
                  <p className="text-lg font-medium text-slate-700">Processing files...</p>
