@@ -1,16 +1,17 @@
 import { GoogleGenAI, Schema, Type } from "@google/genai";
-import { TokenUsage, EvaluationResult, TranslationMode } from "../types";
+import { TokenUsage, EvaluationResult, TranslationMode, UsageStats } from "../types";
 
 // We strictly use the model name requested for "Nano Banana Pro" functionality which is mapped to gemini-3-pro-image-preview
 // as per the instructions for "High-Quality Image Generation and Editing Tasks".
 const MODEL_NAME = 'gemini-3-pro-image-preview';
 const REASONING_MODEL_NAME = 'gemini-3-pro-preview'; // For extraction and evaluation
 
-// Estimated Pricing for Pro Tier (Preview rates or standard Pro rates)
-// Input: $1.25 / 1 million tokens
-// Output: $5.00 / 1 million tokens
-const PRICE_PER_1M_INPUT = 1.25;
-const PRICE_PER_1M_OUTPUT = 5.00;
+// Updated Pricing for Gemini 1.5 Pro / 3.0 Pro (Estimation)
+// Previous rates were for Flash. Pro models are significantly more expensive.
+// Input: $3.50 / 1 million tokens
+// Output: $10.50 / 1 million tokens
+const PRICE_PER_1M_INPUT = 3.50;
+const PRICE_PER_1M_OUTPUT = 10.50;
 
 const SUPPORTED_ASPECT_RATIOS = [
   { label: "1:1", value: 1.0 },
@@ -19,6 +20,10 @@ const SUPPORTED_ASPECT_RATIOS = [
   { label: "9:16", value: 9/16 },
   { label: "16:9", value: 16/9 },
 ];
+
+const calculateCost = (input: number, output: number): number => {
+    return ((input / 1_000_000) * PRICE_PER_1M_INPUT) + ((output / 1_000_000) * PRICE_PER_1M_OUTPUT);
+};
 
 const getBestAspectRatio = (width: number, height: number): string => {
   const targetRatio = width / height;
@@ -54,7 +59,7 @@ const extractAndTranslateText = async (
     targetLanguage: string,
     apiKey: string,
     previousFeedback?: string // Support for retry loop in Step 1
-): Promise<{ mapping: string, usage: TokenUsage }> => {
+): Promise<{ mapping: string, usage: UsageStats }> => {
     const ai = new GoogleGenAI({ apiKey });
     
     // Schema for structured extraction
@@ -79,12 +84,18 @@ const extractAndTranslateText = async (
     2. Translate it to: ${targetLanguage}.
     3. Return a comprehensive list mapping original text to translated text.
     
+    COMPLETENESS PROTOCOL (CRITICAL):
+    - **Tiny Text:** Look for fine print, copyright lines, serial numbers, and footnotes.
+    - **Diagrams:** Extract labels inside charts, axis numbers, and legends.
+    - **Floating Text:** Extract page numbers and headers.
+    - **Directive:** If it is legible pixels, it is text. EXTRACT IT.
+    
     QUALITY STANDARDS (5 DIMENSIONS):
     1. **Accuracy:** Preserve the exact meaning of the source text.
     2. **Fluency:** Use natural, native-level phrasing in ${targetLanguage}. Avoid robotic literal translations.
     3. **Consistency:** Maintain consistent terminology for repeated terms.
     4. **Terminology:** Use professional, domain-specific vocabulary (e.g., Engineering, Medical, Legal) appropriate for the document.
-    5. **Completeness:** Extract and translate EVERYTHING, including small footnotes, diagram labels, and page numbers.
+    5. **Completeness:** Extract and translate EVERYTHING. Missing a single label is a failure.
 
     CRITICAL RULES:
     - If Source is Japanese/Chinese mixed, identify the Kanji correctly.
@@ -123,11 +134,14 @@ const extractAndTranslateText = async (
     });
 
     const usageMetadata = response.usageMetadata;
-    const usage: TokenUsage = {
-        inputTokens: usageMetadata?.promptTokenCount || 0,
-        outputTokens: usageMetadata?.candidatesTokenCount || 0,
-        totalTokens: usageMetadata?.totalTokenCount || 0,
-        estimatedCost: 0 // Calculated later
+    const inputTokens = usageMetadata?.promptTokenCount || 0;
+    const outputTokens = usageMetadata?.candidatesTokenCount || 0;
+    
+    const usage: UsageStats = {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cost: calculateCost(inputTokens, outputTokens)
     };
 
     const jsonText = response.text || "[]";
@@ -177,9 +191,9 @@ const translateImageWithRetry = async (
   const aspectRatio = getBestAspectRatio(width, height);
   const isChineseTarget = targetLanguage.toLowerCase().includes('chinese') || targetLanguage.includes('中文') || targetLanguage.includes('zh');
 
-  let accumulatedCost = 0;
-  let accumulatedInputTokens = 0;
-  let accumulatedOutputTokens = 0;
+  // Usage Tracking Buckets
+  let extractionUsage: UsageStats | undefined;
+  let translationUsage: UsageStats = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 };
 
   // --- TWO-STEP MODE: PRE-CALCULATION ---
   let extractedTextMapping = "";
@@ -188,12 +202,7 @@ const translateImageWithRetry = async (
           // Pass previousSuggestions to Step 1 to fix linguistic errors at the source
           const extraction = await extractAndTranslateText(base64Data, sourceLanguage, targetLanguage, apiKey, previousSuggestions);
           extractedTextMapping = extraction.mapping;
-          
-          // Accumulate costs from Step 1
-          accumulatedInputTokens += extraction.usage.inputTokens;
-          accumulatedOutputTokens += extraction.usage.outputTokens;
-          accumulatedCost += (extraction.usage.inputTokens / 1_000_000) * PRICE_PER_1M_INPUT;
-          accumulatedCost += (extraction.usage.outputTokens / 1_000_000) * PRICE_PER_1M_OUTPUT;
+          extractionUsage = extraction.usage;
       } catch (e) {
           console.warn("Step 1 (Extraction) failed, falling back to direct mode implicitly", e);
           extractedTextMapping = "Extraction failed. Proceed with direct translation.";
@@ -219,6 +228,13 @@ Your ONLY job is to apply this text to the image.
 1. **TRUST THE MAPPING:** The text below has already been corrected based on user feedback. Do not re-translate. Use the "Translated" string exactly.
 2. **REPLACE ONLY:** Identify the "Original" text in the image, erase it (matching background), and print the "Translated" text.
 3. **PRESERVE LAYOUT:** The new text must fit in the exact same bounding box. Adjust font size if necessary, but do not shift the layout.
+
+**STYLE CLONING DIRECTIVE (CRITICAL):**
+- **Font Weight:** If original is Bold, output Bold. If Regular, output Regular.
+- **Color:** Sample the exact hex color of the original text pixels. Do NOT default to black. Use Blue/Red/Green if the original is colored.
+- **Alignment:** Match Left/Center/Right alignment exactly.
+- **Italics:** Preserve italicization.
+- **Mechanism:** "Erase" the old pixels (inpainting background) and "Paint" the new pixels over them.
 
 **TEXT MAPPING TO APPLY:**
 ${extractedTextMapping}
@@ -279,9 +295,6 @@ You are strictly required to adhere to these 5 dimensions of quality:
 - Aspect Ratio: Match Original.
 `;
 
-  // Inject feedback loop if suggestions exist.
-  // In TWO_STEP mode, the linguistic feedback is already handled in Step 1, 
-  // but we include it here primarily for visual/formatting feedback (e.g., "Text is too small", "Background damaged").
   if (previousSuggestions) {
     prompt += `
     
@@ -315,16 +328,28 @@ You are strictly required to adhere to these 5 dimensions of quality:
     const s2Input = step2Meta?.promptTokenCount || 0;
     const s2Output = step2Meta?.candidatesTokenCount || 0;
     
-    accumulatedInputTokens += s2Input;
-    accumulatedOutputTokens += s2Output;
-    accumulatedCost += (s2Input / 1_000_000) * PRICE_PER_1M_INPUT;
-    accumulatedCost += (s2Output / 1_000_000) * PRICE_PER_1M_OUTPUT;
+    translationUsage = {
+        inputTokens: s2Input,
+        outputTokens: s2Output,
+        totalTokens: s2Input + s2Output,
+        cost: calculateCost(s2Input, s2Output)
+    };
+
+    // Aggregate Total Usage so far (Extraction + Translation)
+    const totalInput = (extractionUsage?.inputTokens || 0) + translationUsage.inputTokens;
+    const totalOutput = (extractionUsage?.outputTokens || 0) + translationUsage.outputTokens;
+    const totalCost = (extractionUsage?.cost || 0) + translationUsage.cost;
+    const totalTokens = totalInput + totalOutput;
 
     const totalUsage: TokenUsage = {
-        inputTokens: accumulatedInputTokens,
-        outputTokens: accumulatedOutputTokens,
-        totalTokens: accumulatedInputTokens + accumulatedOutputTokens,
-        estimatedCost: accumulatedCost
+        extraction: extractionUsage,
+        translation: translationUsage,
+        total: {
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            totalTokens: totalTokens,
+            cost: totalCost
+        }
     };
 
     // Parse response for image
@@ -356,10 +381,7 @@ You are strictly required to adhere to these 5 dimensions of quality:
 
     if ((isQuotaError || isInternalError) && retries > 0) {
       console.warn(`API Error. Retrying in 10s... (${retries} attempts left)`);
-      await delay(10000); // Wait 10 seconds
-      // Pass the same accumulated Step 1 data implicitly by checking mode? 
-      // Actually, if we retry, we might want to re-run step 1 if step 1 wasn't the cause.
-      // But for simplicity, we treat the whole block as the retry unit.
+      await delay(10000); 
       return translateImageWithRetry(base64Image, targetLanguage, sourceLanguage, mode, retries - 1, previousSuggestions);
     }
 
@@ -371,8 +393,9 @@ export const evaluateTranslation = async (
   originalImage: string,
   translatedImage: string,
   targetLanguage: string,
-  sourceLanguage: string = 'Auto (Detect)'
-): Promise<EvaluationResult> => {
+  sourceLanguage: string = 'Auto (Detect)',
+  retries = 3
+): Promise<{ result: EvaluationResult, usage: UsageStats }> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("API Key missing");
 
@@ -442,11 +465,23 @@ export const evaluateTranslation = async (
       }
     });
 
+    // Calculate Usage
+    const usageMetadata = response.usageMetadata;
+    const inputTokens = usageMetadata?.promptTokenCount || 0;
+    const outputTokens = usageMetadata?.candidatesTokenCount || 0;
+    
+    const usage: UsageStats = {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cost: calculateCost(inputTokens, outputTokens)
+    };
+
     const jsonText = response.text || "{}";
-    const result = JSON.parse(jsonText);
+    const resultJson = JSON.parse(jsonText);
     
     // Calculate average of 6 dimensions
-    const scores = result.scores;
+    const scores = resultJson.scores;
     const avg = (
         scores.accuracy + 
         scores.fluency + 
@@ -456,21 +491,38 @@ export const evaluateTranslation = async (
         scores.formatPreservation
     ) / 6;
 
-    return {
+    const result: EvaluationResult = {
       scores: scores,
       averageScore: parseFloat(avg.toFixed(1)),
-      reason: result.reason,
-      suggestions: result.suggestions
+      reason: resultJson.reason,
+      suggestions: resultJson.suggestions
     };
 
-  } catch (error) {
+    return { result, usage };
+
+  } catch (error: any) {
     console.error("Evaluation failed", error);
+    
+    const errorMessage = error.message || JSON.stringify(error);
+    const isQuotaError = errorMessage.includes("429") || 
+                         errorMessage.includes("403") || 
+                         errorMessage.includes("quota") || 
+                         errorMessage.includes("RESOURCE_EXHAUSTED");
+    
+    if (isQuotaError && retries > 0) {
+         console.warn(`Evaluation API Error. Retrying in 10s... (${retries} attempts left)`);
+         await delay(10000);
+         return evaluateTranslation(originalImage, translatedImage, targetLanguage, sourceLanguage, retries - 1);
+    }
+
     // Return a fallback so we don't crash the app
-    return {
+    const fallbackResult: EvaluationResult = {
       scores: { accuracy: 0, fluency: 0, consistency: 0, terminology: 0, completeness: 0, formatPreservation: 0 },
       averageScore: 0,
       reason: "评估服务暂时不可用。",
       suggestions: "请稍后重试。"
     };
+    
+    return { result: fallbackResult, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 } };
   }
 };

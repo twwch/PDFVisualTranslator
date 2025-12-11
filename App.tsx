@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw, ClipboardList, Loader2, ArrowRightLeft, Settings2 } from 'lucide-react';
+import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIcon, Trash2, Zap, Coins, X, FileSpreadsheet, RotateCcw, ClipboardList, Loader2, ArrowRightLeft, Settings2, ClipboardCheck } from 'lucide-react';
 import { PageData, PageStatus, ProcessingStatus, SUPPORTED_LANGUAGES, SOURCE_LANGUAGES, TranslationMode } from './types';
 import { convertPdfToImages, convertFileToBase64, generatePdfFromImages, generateComparisonPdf, getPdfPageCount, generateEvaluationPdf } from './services/pdfService';
 import { translateImage, evaluateTranslation } from './services/geminiService';
@@ -10,11 +10,13 @@ import LanguageSelector from './components/LanguageSelector';
 const App: React.FC = () => {
   const [pages, setPages] = useState<PageData[]>([]);
   const [appStatus, setAppStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
+  const [downloadingType, setDownloadingType] = useState<'translated' | 'comparison' | 'cost' | 'evaluation' | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>('');
   const [sourceLanguage, setSourceLanguage] = useState<string>('Auto (Detect)');
   const [translationMode, setTranslationMode] = useState<TranslationMode>(TranslationMode.DIRECT);
   const [apiKeyReady, setApiKeyReady] = useState<boolean>(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [originalFileName, setOriginalFileName] = useState<string>('document');
   
   // Import Configuration State
   const [importConfig, setImportConfig] = useState<{ file: File, totalPages: number } | null>(null);
@@ -74,6 +76,10 @@ const App: React.FC = () => {
         const pdfFile = fileList.find(f => f.type === 'application/pdf');
 
         if (pdfFile) {
+             // Capture original filename without extension
+             const name = pdfFile.name.replace(/\.[^/.]+$/, "");
+             setOriginalFileName(name);
+
              // Step 1: Get Page Count and Open Modal
              const totalPages = await getPdfPageCount(pdfFile);
              setImportConfig({ file: pdfFile, totalPages });
@@ -88,6 +94,10 @@ const App: React.FC = () => {
                  return;
             }
             
+            // Set name based on first image
+            const firstName = imageFiles[0].name.replace(/\.[^/.]+$/, "");
+            setOriginalFileName(imageFiles.length > 1 ? `${firstName}_batch` : firstName);
+
             // Process all images immediately
             const base64Images = await Promise.all(imageFiles.map(f => convertFileToBase64(f)));
             const newPages = base64Images.map((img, index) => ({
@@ -164,35 +174,54 @@ const App: React.FC = () => {
         ));
 
         try {
+            // Step 1 & 2: Translate (Direct or Two-Step)
             const result = await translateImage(page.originalImage, targetLanguage, sourceLanguage, translationMode);
             
+            // Temporary State Update before Evaluation
             setPages(prev => prev.map(p => 
                 p.pageNumber === page.pageNumber ? { 
                     ...p, 
                     translatedImage: result.image, 
                     usage: result.usage,
-                    promptUsed: result.promptUsed, // Store prompt
-                    extractedSegments: result.extractedSegments, // Store segments from Step 1
+                    promptUsed: result.promptUsed, 
+                    extractedSegments: result.extractedSegments, 
                     status: PageStatus.DONE,
                     isEvaluating: true 
                 } : p
             ));
 
-            // Async Evaluation (Non-blocking but updates state when done)
-            evaluateTranslation(page.originalImage, result.image, targetLanguage, sourceLanguage).then(evalResult => {
-                 setPages(prev => prev.map(p => 
-                    p.pageNumber === page.pageNumber ? { 
-                        ...p, 
-                        evaluation: evalResult,
-                        isEvaluating: false
-                    } : p
-                ));
-            }).catch(e => {
-                console.error("Evaluation error", e);
-                setPages(prev => prev.map(p => 
-                    p.pageNumber === page.pageNumber ? { ...p, isEvaluating: false } : p
-                ));
-            });
+            // Step 3: Evaluation
+            evaluateTranslation(page.originalImage, result.image, targetLanguage, sourceLanguage)
+                .then(({ result: evalResult, usage: evalUsage }) => {
+                    setPages(prev => prev.map(p => {
+                        if (p.pageNumber !== page.pageNumber || !p.usage) return p;
+
+                        // Merge evaluation usage into total usage
+                        const updatedUsage = {
+                            ...p.usage,
+                            evaluation: evalUsage,
+                            total: {
+                                inputTokens: p.usage.total.inputTokens + evalUsage.inputTokens,
+                                outputTokens: p.usage.total.outputTokens + evalUsage.outputTokens,
+                                totalTokens: p.usage.total.totalTokens + evalUsage.totalTokens,
+                                cost: p.usage.total.cost + evalUsage.cost
+                            }
+                        };
+
+                        return {
+                            ...p,
+                            evaluation: evalResult,
+                            usage: updatedUsage,
+                            isEvaluating: false
+                        };
+                    }));
+                })
+                .catch(e => {
+                    console.error("Evaluation error", e);
+                    setPages(prev => prev.map(p => 
+                        p.pageNumber === page.pageNumber ? { ...p, isEvaluating: false } : p
+                    ));
+                });
 
         } catch (error: any) {
             setPages(prev => prev.map(p => 
@@ -229,7 +258,6 @@ const App: React.FC = () => {
         // Retrieve suggestions from previous attempt if available
         const previousSuggestions = page.evaluation?.suggestions;
 
-        // Update state to translating
         setPages(prev => prev.map(p => 
             p.pageNumber === page.pageNumber ? { ...p, status: PageStatus.TRANSLATING, errorMessage: undefined } : p
         ));
@@ -242,22 +270,30 @@ const App: React.FC = () => {
                     ...p, 
                     translatedImage: result.image, 
                     usage: result.usage,
-                    promptUsed: result.promptUsed, // Store prompt
-                    extractedSegments: result.extractedSegments, // Store segments
+                    promptUsed: result.promptUsed, 
+                    extractedSegments: result.extractedSegments, 
                     status: PageStatus.DONE,
                     isEvaluating: true
                 } : p
             ));
 
-            evaluateTranslation(page.originalImage, result.image, targetLanguage, sourceLanguage).then(evalResult => {
-                 setPages(prev => prev.map(p => 
-                    p.pageNumber === page.pageNumber ? { 
-                        ...p, 
-                        evaluation: evalResult,
-                        isEvaluating: false
-                    } : p
-                ));
-            });
+            evaluateTranslation(page.originalImage, result.image, targetLanguage, sourceLanguage)
+                .then(({ result: evalResult, usage: evalUsage }) => {
+                    setPages(prev => prev.map(p => {
+                        if (p.pageNumber !== page.pageNumber || !p.usage) return p;
+                        const updatedUsage = {
+                            ...p.usage,
+                            evaluation: evalUsage,
+                            total: {
+                                inputTokens: p.usage.total.inputTokens + evalUsage.inputTokens,
+                                outputTokens: p.usage.total.outputTokens + evalUsage.outputTokens,
+                                totalTokens: p.usage.total.totalTokens + evalUsage.totalTokens,
+                                cost: p.usage.total.cost + evalUsage.cost
+                            }
+                        };
+                        return { ...p, evaluation: evalResult, usage: updatedUsage, isEvaluating: false };
+                    }));
+                });
 
         } catch (error: any) {
             setPages(prev => prev.map(p => 
@@ -289,7 +325,6 @@ const App: React.FC = () => {
     
     const previousSuggestions = pageToRetry.evaluation?.suggestions;
 
-    // Set specific page to translating
     setPages(prev => prev.map(p => 
         p.pageNumber === pageNumber ? { ...p, status: PageStatus.TRANSLATING, errorMessage: undefined } : p
     ));
@@ -302,22 +337,30 @@ const App: React.FC = () => {
                 ...p, 
                 translatedImage: result.image, 
                 usage: result.usage,
-                promptUsed: result.promptUsed, // Store prompt
-                extractedSegments: result.extractedSegments, // Store segments
+                promptUsed: result.promptUsed,
+                extractedSegments: result.extractedSegments,
                 status: PageStatus.DONE,
                 isEvaluating: true
             } : p
         ));
 
-        evaluateTranslation(pageToRetry.originalImage, result.image, targetLanguage, sourceLanguage).then(evalResult => {
-                setPages(prev => prev.map(p => 
-                p.pageNumber === pageNumber ? { 
-                    ...p, 
-                    evaluation: evalResult,
-                    isEvaluating: false
-                } : p
-            ));
-        });
+        evaluateTranslation(pageToRetry.originalImage, result.image, targetLanguage, sourceLanguage)
+            .then(({ result: evalResult, usage: evalUsage }) => {
+                setPages(prev => prev.map(p => {
+                    if (p.pageNumber !== pageNumber || !p.usage) return p;
+                    const updatedUsage = {
+                        ...p.usage,
+                        evaluation: evalUsage,
+                        total: {
+                            inputTokens: p.usage.total.inputTokens + evalUsage.inputTokens,
+                            outputTokens: p.usage.total.outputTokens + evalUsage.outputTokens,
+                            totalTokens: p.usage.total.totalTokens + evalUsage.totalTokens,
+                            cost: p.usage.total.cost + evalUsage.cost
+                        }
+                    };
+                    return { ...p, evaluation: evalResult, usage: updatedUsage, isEvaluating: false };
+                }));
+            });
 
     } catch (error: any) {
         setPages(prev => prev.map(p => 
@@ -330,6 +373,117 @@ const App: React.FC = () => {
     }
   };
 
+  // Re-run evaluation for a specific page
+  const handleRetryEvaluation = async (pageNumber: number) => {
+      if (!apiKeyReady) {
+          setGlobalError("Please select an API Key first.");
+          return;
+      }
+      
+      const page = pages.find(p => p.pageNumber === pageNumber);
+      if (!page || !page.translatedImage) return;
+
+      setPages(prev => prev.map(p => 
+          p.pageNumber === pageNumber ? { ...p, isEvaluating: true } : p
+      ));
+
+      try {
+          const { result: evalResult, usage: evalUsage } = await evaluateTranslation(page.originalImage, page.translatedImage, targetLanguage, sourceLanguage);
+          
+          setPages(prev => prev.map(p => {
+              if (p.pageNumber !== pageNumber) return p;
+              
+              // If we already have usage, merge this new evaluation cost into it
+              // Note: This adds to the total, effectively charging for the re-eval
+              let updatedUsage = p.usage;
+              if (p.usage) {
+                  updatedUsage = {
+                      ...p.usage,
+                      evaluation: evalUsage, // Replace last eval usage detail
+                      total: {
+                          inputTokens: p.usage.total.inputTokens + evalUsage.inputTokens,
+                          outputTokens: p.usage.total.outputTokens + evalUsage.outputTokens,
+                          totalTokens: p.usage.total.totalTokens + evalUsage.totalTokens,
+                          cost: p.usage.total.cost + evalUsage.cost
+                      }
+                  };
+              }
+
+              return { 
+                  ...p, 
+                  evaluation: evalResult,
+                  usage: updatedUsage,
+                  isEvaluating: false
+              };
+          }));
+      } catch (e) {
+          console.error("Manual evaluation retry failed", e);
+          setPages(prev => prev.map(p => 
+              p.pageNumber === pageNumber ? { ...p, isEvaluating: false } : p
+          ));
+      }
+  };
+
+  const handleRetryFailedEvaluations = async () => {
+       if (!apiKeyReady) {
+          setGlobalError("Please select an API Key first.");
+          return;
+      }
+
+      const failedEvalPages = pages.filter(p => 
+          p.status === PageStatus.DONE && 
+          p.translatedImage && 
+          (!p.evaluation || p.evaluation.averageScore === 0)
+      );
+
+      if (failedEvalPages.length === 0) return;
+
+      setPages(prev => prev.map(p => 
+          failedEvalPages.some(fp => fp.pageNumber === p.pageNumber) ? { ...p, isEvaluating: true } : p
+      ));
+
+      for (const page of failedEvalPages) {
+          if (!page.translatedImage) continue;
+          
+          try {
+              const { result: evalResult, usage: evalUsage } = await evaluateTranslation(page.originalImage, page.translatedImage, targetLanguage, sourceLanguage);
+               setPages(prev => prev.map(p => {
+                  if (p.pageNumber !== page.pageNumber) return p;
+                  let updatedUsage = p.usage;
+                  if (p.usage) {
+                      updatedUsage = {
+                          ...p.usage,
+                          evaluation: evalUsage,
+                          total: {
+                              inputTokens: p.usage.total.inputTokens + evalUsage.inputTokens,
+                              outputTokens: p.usage.total.outputTokens + evalUsage.outputTokens,
+                              totalTokens: p.usage.total.totalTokens + evalUsage.totalTokens,
+                              cost: p.usage.total.cost + evalUsage.cost
+                          }
+                      };
+                  }
+                  return { ...p, evaluation: evalResult, usage: updatedUsage, isEvaluating: false };
+              }));
+          } catch (e) {
+              console.error(`Batch evaluation retry failed for page ${page.pageNumber}`, e);
+               setPages(prev => prev.map(p => 
+                  p.pageNumber === page.pageNumber ? { ...p, isEvaluating: false } : p
+              ));
+          }
+      }
+  };
+
+  const generateFilename = (category: string, extension: string) => {
+    const now = new Date();
+    const timestamp = now.getFullYear().toString() +
+      (now.getMonth() + 1).toString().padStart(2, '0') +
+      now.getDate().toString().padStart(2, '0') + '_' +
+      now.getHours().toString().padStart(2, '0') +
+      now.getMinutes().toString().padStart(2, '0');
+    const safeOriginalName = originalFileName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_');
+    return `${safeOriginalName}_${timestamp}_${category}.${extension}`;
+  };
+
   const handleDownload = async (type: 'translated' | 'comparison') => {
     try {
         const finishedPages = pages.filter(p => p.status === PageStatus.DONE && p.translatedImage);
@@ -338,10 +492,11 @@ const App: React.FC = () => {
             return;
         }
         
+        setDownloadingType(type);
         let blob: Blob;
         let filename: string;
 
-        setAppStatus(ProcessingStatus.CONVERTING_PDF); // Re-use status to show processing
+        setAppStatus(ProcessingStatus.CONVERTING_PDF); 
 
         if (type === 'comparison') {
              const comparisonData = finishedPages.map(p => ({
@@ -349,11 +504,11 @@ const App: React.FC = () => {
                  translated: p.translatedImage as string
              }));
              blob = await generateComparisonPdf(comparisonData);
-             filename = `translated_comparison_${targetLanguage}.pdf`;
+             filename = generateFilename('Comparison_Report', 'pdf');
         } else {
              const images = finishedPages.map(p => p.translatedImage as string);
              blob = await generatePdfFromImages(images);
-             filename = `translated_${targetLanguage}.pdf`;
+             filename = generateFilename('Translated', 'pdf');
         }
         
         const url = URL.createObjectURL(blob);
@@ -369,6 +524,7 @@ const App: React.FC = () => {
         setGlobalError("Failed to generate PDF.");
     } finally {
         setAppStatus(ProcessingStatus.COMPLETED);
+        setDownloadingType(null);
     }
   };
 
@@ -380,22 +536,43 @@ const App: React.FC = () => {
             return;
         }
 
-        const headers = ["Page Number", "Input Tokens", "Output Tokens", "Total Tokens", "Estimated Cost ($)"];
-        const rows = finishedPages.map(p => [
-            p.pageNumber,
-            p.usage?.inputTokens || 0,
-            p.usage?.outputTokens || 0,
-            p.usage?.totalTokens || 0,
-            (p.usage?.estimatedCost || 0).toFixed(6)
-        ]);
+        setDownloadingType('cost');
+        
+        // Expanded Headers
+        const headers = [
+            "Page Number", 
+            "EXT Input", "EXT Output", "EXT Cost", 
+            "TRANS Input", "TRANS Output", "TRANS Cost",
+            "EVAL Input", "EVAL Output", "EVAL Cost",
+            "TOTAL Cost ($)"
+        ];
+
+        const rows = finishedPages.map(p => {
+            const u = p.usage!;
+            return [
+                p.pageNumber,
+                u.extraction?.inputTokens || 0,
+                u.extraction?.outputTokens || 0,
+                (u.extraction?.cost || 0).toFixed(6),
+                u.translation.inputTokens || 0,
+                u.translation.outputTokens || 0,
+                u.translation.cost.toFixed(6),
+                u.evaluation?.inputTokens || 0,
+                u.evaluation?.outputTokens || 0,
+                (u.evaluation?.cost || 0).toFixed(6),
+                u.total.cost.toFixed(6)
+            ];
+        });
 
         // Calculate Totals
-        const totalInput = rows.reduce((acc, row) => acc + (row[1] as number), 0);
-        const totalOutput = rows.reduce((acc, row) => acc + (row[2] as number), 0);
-        const totalTokens = rows.reduce((acc, row) => acc + (row[3] as number), 0);
-        const totalCost = rows.reduce((acc, row) => acc + parseFloat(row[4] as string), 0);
+        const sums = Array(headers.length - 1).fill(0);
+        rows.forEach(row => {
+            for (let i = 1; i < row.length; i++) {
+                sums[i-1] += parseFloat(row[i] as string);
+            }
+        });
 
-        rows.push(["TOTAL", totalInput, totalOutput, totalTokens, totalCost.toFixed(6)]);
+        rows.push(["TOTAL", ...sums.map(s => s.toFixed(6))]);
 
         const csvContent = "data:text/csv;charset=utf-8," 
             + headers.join(",") + "\n" 
@@ -404,7 +581,7 @@ const App: React.FC = () => {
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `translation_cost_report.csv`);
+        link.setAttribute("download", generateFilename('Cost_Report', 'csv'));
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -412,6 +589,8 @@ const App: React.FC = () => {
     } catch (e) {
         console.error(e);
         setGlobalError("Failed to generate Cost Report.");
+    } finally {
+        setDownloadingType(null);
     }
   };
 
@@ -423,13 +602,14 @@ const App: React.FC = () => {
             return;
         }
 
-        setAppStatus(ProcessingStatus.CONVERTING_PDF); // Show loading state
+        setDownloadingType('evaluation');
+        setAppStatus(ProcessingStatus.CONVERTING_PDF); 
 
         const blob = await generateEvaluationPdf(evaluatedPages);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `translation_evaluation_report.pdf`;
+        a.download = generateFilename('Evaluation_Report', 'pdf');
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -439,6 +619,7 @@ const App: React.FC = () => {
         setGlobalError("Failed to generate Evaluation Report PDF.");
     } finally {
         setAppStatus(ProcessingStatus.COMPLETED);
+        setDownloadingType(null);
     }
   };
 
@@ -448,16 +629,17 @@ const App: React.FC = () => {
           setAppStatus(ProcessingStatus.IDLE);
           setTargetLanguage('');
           setGlobalError(null);
+          setOriginalFileName('document');
       }
   }
 
   // Calculate Aggregated Stats
-  const totalTokens = pages.reduce((acc, p) => acc + (p.usage?.totalTokens || 0), 0);
-  const totalCost = pages.reduce((acc, p) => acc + (p.usage?.estimatedCost || 0), 0);
+  const totalTokens = pages.reduce((acc, p) => acc + (p.usage?.total.totalTokens || 0), 0);
+  const totalCost = pages.reduce((acc, p) => acc + (p.usage?.total.cost || 0), 0);
   const failedCount = pages.filter(p => p.status === PageStatus.ERROR).length;
   const completedCount = pages.filter(p => p.status === PageStatus.DONE).length;
+  const failedEvalCount = pages.filter(p => p.status === PageStatus.DONE && (!p.evaluation || p.evaluation.averageScore === 0)).length;
   const isTranslating = appStatus === ProcessingStatus.TRANSLATING;
-  const isConverting = appStatus === ProcessingStatus.CONVERTING_PDF;
   const hasPages = pages.length > 0;
 
   if (!apiKeyReady) {
@@ -499,7 +681,7 @@ const App: React.FC = () => {
                           <h3 className="text-xl font-bold text-slate-900">Import PDF</h3>
                           <p className="text-sm text-slate-500">{importConfig.file.name}</p>
                       </div>
-                      <button onClick={handleCancelImport} disabled={isConverting} className="text-slate-400 hover:text-slate-600 disabled:opacity-50">
+                      <button onClick={handleCancelImport} disabled={appStatus === ProcessingStatus.CONVERTING_PDF} className="text-slate-400 hover:text-slate-600 disabled:opacity-50">
                           <X size={24} />
                       </button>
                   </div>
@@ -519,7 +701,7 @@ const App: React.FC = () => {
                                   min={1} 
                                   max={importRange.end}
                                   value={importRange.start}
-                                  disabled={isConverting}
+                                  disabled={appStatus === ProcessingStatus.CONVERTING_PDF}
                                   onChange={(e) => {
                                       const val = parseInt(e.target.value);
                                       if (!isNaN(val)) setImportRange(prev => ({ ...prev, start: Math.max(1, Math.min(val, prev.end)) }));
@@ -535,7 +717,7 @@ const App: React.FC = () => {
                                   min={importRange.start} 
                                   max={importConfig.totalPages}
                                   value={importRange.end}
-                                  disabled={isConverting}
+                                  disabled={appStatus === ProcessingStatus.CONVERTING_PDF}
                                   onChange={(e) => {
                                       const val = parseInt(e.target.value);
                                       if (!isNaN(val)) setImportRange(prev => ({ ...prev, end: Math.max(prev.start, Math.min(val, importConfig.totalPages)) }));
@@ -549,18 +731,18 @@ const App: React.FC = () => {
                   <div className="flex gap-3">
                       <button 
                           onClick={handleCancelImport}
-                          disabled={isConverting}
+                          disabled={appStatus === ProcessingStatus.CONVERTING_PDF}
                           className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                           Cancel
                       </button>
                       <button 
                           onClick={handleConfirmImport}
-                          disabled={isConverting}
+                          disabled={appStatus === ProcessingStatus.CONVERTING_PDF}
                           className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                       >
-                          {isConverting && <Loader2 size={16} className="animate-spin" />}
-                          {isConverting ? "Importing..." : "Import Pages"}
+                          {appStatus === ProcessingStatus.CONVERTING_PDF && <Loader2 size={16} className="animate-spin" />}
+                          {appStatus === ProcessingStatus.CONVERTING_PDF ? "Importing..." : "Import Pages"}
                       </button>
                   </div>
               </div>
@@ -651,36 +833,52 @@ const App: React.FC = () => {
 
             {(appStatus === ProcessingStatus.COMPLETED || completedCount > 0) && (
                 <div className="flex items-center gap-2">
+                    {/* Retry Failed Evaluations Button */}
+                    {failedEvalCount > 0 && !isTranslating && (
+                        <button
+                            onClick={handleRetryFailedEvaluations}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors shadow-sm text-sm border border-amber-200"
+                            title="Retry failed evaluations"
+                        >
+                            <ClipboardCheck size={16} />
+                            <span className="hidden lg:inline">Retry Eval ({failedEvalCount})</span>
+                        </button>
+                    )}
+
                     <button
                         onClick={() => handleDownload('translated')}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-green-600 text-white hover:bg-green-700 transition-colors shadow-sm text-sm"
+                        disabled={!!downloadingType}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-green-600 text-white hover:bg-green-700 transition-colors shadow-sm text-sm disabled:opacity-70 disabled:cursor-not-allowed"
                         title="Download translated pages only"
                     >
-                        <Download size={16} />
+                        {downloadingType === 'translated' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                         <span className="hidden lg:inline">Translated</span>
                     </button>
                     <button
                         onClick={() => handleDownload('comparison')}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-slate-700 text-white hover:bg-slate-800 transition-colors shadow-sm text-sm"
+                        disabled={!!downloadingType}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-slate-700 text-white hover:bg-slate-800 transition-colors shadow-sm text-sm disabled:opacity-70 disabled:cursor-not-allowed"
                         title="Download side-by-side comparison"
                     >
-                        <Columns size={16} />
+                        {downloadingType === 'comparison' ? <Loader2 size={16} className="animate-spin" /> : <Columns size={16} />}
                         <span className="hidden lg:inline">Compare</span>
                     </button>
                     <button
                         onClick={handleDownloadCostReport}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-amber-600 text-white hover:bg-amber-700 transition-colors shadow-sm text-sm"
+                        disabled={!!downloadingType}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-amber-600 text-white hover:bg-amber-700 transition-colors shadow-sm text-sm disabled:opacity-70 disabled:cursor-not-allowed"
                         title="Download Cost Report (CSV)"
                     >
-                        <FileSpreadsheet size={16} />
+                        {downloadingType === 'cost' ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
                         <span className="hidden lg:inline">Cost Report</span>
                     </button>
                     <button
                         onClick={handleDownloadEvaluationReport}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-purple-600 text-white hover:bg-purple-700 transition-colors shadow-sm text-sm"
+                        disabled={!!downloadingType}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium bg-purple-600 text-white hover:bg-purple-700 transition-colors shadow-sm text-sm disabled:opacity-70 disabled:cursor-not-allowed"
                         title="Download Evaluation Report (PDF)"
                     >
-                        <ClipboardList size={16} />
+                        {downloadingType === 'evaluation' ? <Loader2 size={16} className="animate-spin" /> : <ClipboardList size={16} />}
                         <span className="hidden lg:inline">QA Report</span>
                     </button>
                 </div>
@@ -751,7 +949,7 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {appStatus === ProcessingStatus.CONVERTING_PDF && !importConfig && (
+        {appStatus === ProcessingStatus.CONVERTING_PDF && !importConfig && !downloadingType && (
             <div className="mt-20 flex flex-col items-center justify-center">
                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
                  <p className="text-lg font-medium text-slate-700">Processing files...</p>
@@ -763,7 +961,11 @@ const App: React.FC = () => {
             <div className="flex flex-col gap-8">
                 {pages.map((page) => (
                     <div key={page.pageNumber} className="w-full">
-                        <PageCard page={page} onRetry={() => handleRetryPage(page.pageNumber)} />
+                        <PageCard 
+                            page={page} 
+                            onRetry={() => handleRetryPage(page.pageNumber)} 
+                            onRetryEvaluation={() => handleRetryEvaluation(page.pageNumber)}
+                        />
                     </div>
                 ))}
             </div>
@@ -790,7 +992,7 @@ const App: React.FC = () => {
                               <Coins size={20} />
                           </div>
                           <div>
-                              <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Estimated Cost</p>
+                              <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Total Cost (Est.)</p>
                               <p className="text-lg font-bold text-slate-800 leading-none">${totalCost.toFixed(4)}</p>
                           </div>
                       </div>
@@ -798,7 +1000,7 @@ const App: React.FC = () => {
                   
                   {appStatus === ProcessingStatus.COMPLETED && (
                     <div className="text-xs text-slate-400 hidden sm:block">
-                        Based on Pro tier estimation
+                        Based on Pro Tier: $3.50/$10.50
                     </div>
                   )}
               </div>

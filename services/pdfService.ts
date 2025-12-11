@@ -234,6 +234,219 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: num
     return currentY + lineHeight;
 };
 
+// Create a Summary Page for the Evaluation Report
+const createSummaryPageImage = async (pages: PageData[]): Promise<string> => {
+    const canvas = document.createElement('canvas');
+    const width = 1240;
+    const height = 1754;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error("Canvas context missing");
+
+    // Background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+
+    // --- Branding Header (Top Center) ---
+    const centerX = width / 2;
+    let currentY = 100;
+
+    // Text 1: "此文件由 **译曲同工** 提供翻译服务"
+    // We construct this using multiple fills to simulate bolding specific parts if font doesn't support it directly
+    const textPart1 = "此文件由 ";
+    const textPartBold = "译曲同工";
+    const textPart2 = " 提供翻译服务";
+
+    ctx.font = '24px "Microsoft YaHei", sans-serif'; 
+    const m1 = ctx.measureText(textPart1).width;
+    ctx.font = 'bold 26px "Microsoft YaHei", sans-serif'; 
+    const mBold = ctx.measureText(textPartBold).width;
+    ctx.font = '24px "Microsoft YaHei", sans-serif';
+    const m2 = ctx.measureText(textPart2).width;
+
+    const totalW = m1 + mBold + m2;
+    let startX = centerX - totalW / 2;
+
+    ctx.textBaseline = 'middle';
+    
+    // Draw Part 1
+    ctx.textAlign = 'left';
+    ctx.font = '24px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#334155'; // slate-700
+    ctx.fillText(textPart1, startX, currentY);
+    startX += m1;
+
+    // Draw Bold Part
+    ctx.font = 'bold 26px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#0f172a'; // slate-900 (darker)
+    ctx.fillText(textPartBold, startX, currentY);
+    startX += mBold;
+
+    // Draw Part 2
+    ctx.font = '24px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#334155';
+    ctx.fillText(textPart2, startX, currentY);
+
+    currentY += 45;
+
+    // Text 2: "更多信息请访问 aitranspro.com"
+    ctx.textAlign = 'center';
+    ctx.font = '20px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#64748b'; // slate-500
+    ctx.fillText("更多信息请访问 aitranspro.com", centerX, currentY);
+    currentY += 40;
+
+    // Text 3: "——内容仅供内部评估与试阅——"
+    ctx.font = 'italic 18px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#94a3b8'; // slate-400
+    ctx.fillText("——内容仅供内部评估与试阅——", centerX, currentY);
+    
+    // --- Report Title ---
+    currentY += 140;
+    ctx.font = 'bold 48px sans-serif';
+    ctx.fillStyle = '#1e293b';
+    ctx.fillText("Translation Evaluation Report", centerX, currentY);
+    
+    // --- Global Stats ---
+    currentY += 100;
+    
+    // Calculate Stats
+    const totalPages = pages.length;
+    // Updated line to correctly access totalTokens from UsageStats within TokenUsage
+    const totalTokens = pages.reduce((acc, p) => acc + (p.usage?.total.totalTokens || 0), 0);
+    const validScores = pages.filter(p => p.evaluation).map(p => p.evaluation!.averageScore);
+    const globalAverage = validScores.length > 0 
+        ? (validScores.reduce((a, b) => a + b, 0) / validScores.length).toFixed(2) 
+        : "N/A";
+
+    const drawStatCard = (label: string, value: string, x: number, y: number, w: number, color: string) => {
+        // Shadow/Card
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.05)';
+        ctx.shadowBlur = 15;
+        ctx.shadowOffsetY = 4;
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(x, y, w, 160);
+        ctx.shadowColor = 'transparent';
+
+        // Border
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, w, 160);
+
+        // Label
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#64748b';
+        ctx.font = 'bold 20px sans-serif';
+        ctx.fillText(label, x + w/2, y + 45);
+
+        // Value
+        ctx.fillStyle = color;
+        ctx.font = 'bold 56px sans-serif';
+        ctx.fillText(value, x + w/2, y + 115);
+    };
+
+    const cardW = 300;
+    const gap = 60;
+    // Total width of cards = 3 * 300 + 2 * 60 = 1020
+    const startCardX = (width - (cardW * 3 + gap * 2)) / 2;
+
+    drawStatCard("Total Pages", totalPages.toString(), startCardX, currentY, cardW, '#334155');
+    drawStatCard("Total Tokens", (totalTokens/1000).toFixed(1) + "k", startCardX + cardW + gap, currentY, cardW, '#334155');
+    drawStatCard("Overall Score", globalAverage, startCardX + (cardW + gap) * 2, currentY, cardW, '#16a34a');
+
+    // --- Dimension Breakdown Table ---
+    currentY += 280;
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 32px sans-serif';
+    ctx.fillText("Detailed Performance Metrics", centerX, currentY);
+    currentY += 60;
+
+    const dims = ['accuracy', 'fluency', 'consistency', 'terminology', 'completeness', 'formatPreservation'] as const;
+    const dimLabels = [
+        'Accuracy (准确性)', 
+        'Fluency (流畅度)', 
+        'Consistency (一致性)', 
+        'Terminology (术语)', 
+        'Completeness (完整性)', 
+        'Format Preservation (格式)'
+    ];
+    
+    // Compute Averages
+    const dimAvgs = dims.map(d => {
+        const scores = pages.filter(p => p.evaluation).map(p => p.evaluation!.scores[d]);
+        return scores.length > 0 ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(2) : "-";
+    });
+
+    const tableW = 900;
+    const rowH = 70;
+    const tableX = (width - tableW) / 2;
+
+    // Table Header
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(tableX, currentY, tableW, rowH);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText("Metric / Model", tableX + 40, currentY + rowH/2);
+    ctx.textAlign = 'right';
+    ctx.fillText("Average Score", tableX + tableW - 40, currentY + rowH/2);
+
+    currentY += rowH;
+
+    // Rows
+    dimLabels.forEach((label, idx) => {
+        // Stripe background
+        if (idx % 2 === 1) {
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(tableX, currentY, tableW, rowH);
+        }
+
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#334155';
+        ctx.font = '22px sans-serif';
+        ctx.fillText(label, tableX + 40, currentY + rowH/2);
+
+        const score = dimAvgs[idx];
+        const numScore = parseFloat(score);
+
+        // Color coded score
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 22px sans-serif';
+        
+        let color = '#94a3b8'; // gray for N/A
+        if (!isNaN(numScore)) {
+            if (numScore >= 9) color = '#15803d'; // dark green
+            else if (numScore >= 8) color = '#16a34a'; // green
+            else if (numScore >= 6) color = '#ca8a04'; // yellow-dark
+            else color = '#dc2626'; // red
+        }
+        
+        // Score badge background
+        if (!isNaN(numScore)) {
+             const bgW = 80;
+             const bgH = 40;
+             ctx.fillStyle = numScore >= 8 ? '#dcfce7' : numScore >= 6 ? '#fef9c3' : '#fee2e2';
+             // Approximate centered background for the number
+             ctx.fillRect(tableX + tableW - 40 - bgW, currentY + rowH/2 - bgH/2, bgW, bgH);
+        }
+        
+        ctx.fillStyle = color;
+        ctx.fillText(score, tableX + tableW - 55, currentY + rowH/2 + 2); // adjust for visual centering in box
+
+        currentY += rowH;
+    });
+
+    // Outer Border
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(tableX, currentY - rowH * (dimLabels.length + 1), tableW, rowH * (dimLabels.length + 1));
+
+    return canvas.toDataURL('image/jpeg', 0.90);
+};
+
 // Render a single evaluation report page to a high-res canvas image
 const createReportPageImage = async (page: PageData): Promise<string> => {
     const canvas = document.createElement('canvas');
@@ -252,7 +465,7 @@ const createReportPageImage = async (page: PageData): Promise<string> => {
     // 2. Header
     ctx.fillStyle = '#1e293b'; // slate-800
     ctx.font = 'bold 36px sans-serif';
-    ctx.fillText(`Evaluation Report - Page ${page.pageNumber}`, 50, 60);
+    ctx.fillText(`Evaluation Detail - Page ${page.pageNumber}`, 50, 60);
 
     // Score Badge in Header
     if (page.evaluation) {
@@ -261,7 +474,7 @@ const createReportPageImage = async (page: PageData): Promise<string> => {
         ctx.fillStyle = score >= 8 ? '#16a34a' : score >= 5 ? '#ca8a04' : '#dc2626';
         ctx.font = 'bold 28px sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText(`Score: ${score}/10`, width - 50, 60);
+        ctx.fillText(`Page Score: ${score}/10`, width - 50, 60);
         ctx.textAlign = 'left';
     }
 
@@ -290,6 +503,10 @@ const createReportPageImage = async (page: PageData): Promise<string> => {
                 const dx = x + (halfW - dw) / 2;
                 const dy = imgAreaY + (imgAreaH - dh) / 2;
                 ctx.drawImage(img, dx, dy, dw, dh);
+                // Border around image
+                ctx.strokeStyle = '#e2e8f0';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(dx, dy, dw, dh);
                 resolve();
             };
             img.onerror = () => resolve(); // prevent crash on image fail
@@ -317,7 +534,7 @@ const createReportPageImage = async (page: PageData): Promise<string> => {
     // Title
     ctx.fillStyle = '#0f172a'; // slate-900
     ctx.font = 'bold 24px sans-serif';
-    ctx.fillText("Detailed Scores", margin, currentY);
+    ctx.fillText("Detailed Metrics", margin, currentY);
     currentY += 40;
 
     if (page.evaluation) {
@@ -358,23 +575,23 @@ const createReportPageImage = async (page: PageData): Promise<string> => {
 
         // Reason Section
         ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 24px sans-serif';
+        ctx.font = 'bold 24px "Microsoft YaHei", sans-serif';
         ctx.fillText("评估原因 (Reason)", margin, currentY);
         currentY += 35;
         
         ctx.fillStyle = '#334155';
-        ctx.font = '20px sans-serif';
+        ctx.font = '20px "Microsoft YaHei", sans-serif';
         currentY = wrapText(ctx, page.evaluation.reason, margin, currentY, width - margin * 2, 30);
         currentY += 40;
 
         // Suggestions Section
         ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 24px sans-serif';
+        ctx.font = 'bold 24px "Microsoft YaHei", sans-serif';
         ctx.fillText("优化建议 (Suggestions)", margin, currentY);
         currentY += 35;
         
         ctx.fillStyle = '#4338ca'; // indigo-700
-        ctx.font = '20px sans-serif';
+        ctx.font = '20px "Microsoft YaHei", sans-serif';
         wrapText(ctx, page.evaluation.suggestions, margin, currentY, width - margin * 2, 30);
     }
 
@@ -395,8 +612,13 @@ export const generateEvaluationPdf = async (pages: PageData[]): Promise<Blob> =>
   const pdfWidth = pdf.internal.pageSize.getWidth();
   const pdfHeight = pdf.internal.pageSize.getHeight();
 
+  // 1. Generate Summary Cover Page
+  const summaryImage = await createSummaryPageImage(pages);
+  pdf.addImage(summaryImage, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+
+  // 2. Generate Detail Pages
   for (let i = 0; i < pages.length; i++) {
-      if (i > 0) pdf.addPage();
+      pdf.addPage();
       
       // Render the visual report to an image string first
       const reportImage = await createReportPageImage(pages[i]);

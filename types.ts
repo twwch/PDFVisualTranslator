@@ -18,11 +18,18 @@ export enum TranslationMode {
   TWO_STEP = 'TWO_STEP' // New: Text Extraction -> Replacement
 }
 
-export interface TokenUsage {
+export interface UsageStats {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  estimatedCost: number;
+  cost: number;
+}
+
+export interface TokenUsage {
+  extraction?: UsageStats; // Step 1 (Two-Step Mode)
+  translation: UsageStats; // Step 2 (Image Generation)
+  evaluation?: UsageStats; // Step 3 (QA)
+  total: UsageStats;       // Aggregated
 }
 
 export interface EvaluationScores {

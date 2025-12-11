@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { PageData, PageStatus } from '../types';
-import { Loader2, AlertCircle, ArrowRight, Zap, Coins, RotateCcw, Star, X, MessageSquareText, Copy, FileText } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowRight, Zap, Coins, RotateCcw, Star, X, MessageSquareText, Copy, FileText, ClipboardCheck } from 'lucide-react';
 
 interface PageCardProps {
   page: PageData;
   onRetry?: () => void;
+  onRetryEvaluation?: () => void;
 }
 
-const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
+const PageCard: React.FC<PageCardProps> = ({ page, onRetry, onRetryEvaluation }) => {
   const [showScoreModal, setShowScoreModal] = useState(false);
   const [showPromptModal, setShowPromptModal] = useState(false);
   const [showSegmentsModal, setShowSegmentsModal] = useState(false);
@@ -37,22 +39,64 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
       }
   }
 
+  // Ensure body scroll is locked when modal is open
+  useEffect(() => {
+    if (showScoreModal || showPromptModal || showSegmentsModal) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [showScoreModal, showPromptModal, showSegmentsModal]);
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible flex flex-col h-full relative z-0">
       <div className="p-3 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
         <span className="font-semibold text-slate-700">Page {page.pageNumber}</span>
         <div className="flex items-center gap-3">
-            {page.usage && (
-                <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">
+            {page.usage && page.usage.total && (
+                <div className="group relative hidden sm:flex items-center gap-2 text-xs text-slate-500 bg-white px-2 py-1 rounded border border-slate-200 cursor-help">
                     <span className="flex items-center gap-1" title="Total Tokens">
                         <Zap size={12} className="text-amber-500" />
-                        {page.usage.totalTokens.toLocaleString()}
+                        {page.usage.total.totalTokens?.toLocaleString() || '0'}
                     </span>
                     <span className="w-px h-3 bg-slate-200"></span>
                     <span className="flex items-center gap-1" title="Estimated Cost">
                         <Coins size={12} className="text-green-600" />
-                        ${page.usage.estimatedCost.toFixed(4)}
+                        ${page.usage.total.cost.toFixed(4)}
                     </span>
+
+                    {/* Cost Breakdown Tooltip */}
+                    <div className="absolute top-full right-0 mt-2 w-56 bg-white rounded-lg shadow-xl border border-slate-200 p-3 z-[60] hidden group-hover:block text-left">
+                        <p className="text-xs font-bold text-slate-700 mb-2 border-b border-slate-100 pb-1">Cost Breakdown</p>
+                        
+                        {/* Step 1: Extraction (Optional) */}
+                        {page.usage.extraction && (
+                            <div className="flex justify-between text-xs mb-1">
+                                <span className="text-slate-500">Extraction:</span>
+                                <span className="font-mono text-slate-700">${page.usage.extraction.cost.toFixed(4)}</span>
+                            </div>
+                        )}
+                        
+                        {/* Step 2: Translation */}
+                        <div className="flex justify-between text-xs mb-1">
+                            <span className="text-slate-500">Translation:</span>
+                            <span className="font-mono text-slate-700">${page.usage.translation.cost.toFixed(4)}</span>
+                        </div>
+
+                        {/* Step 3: Evaluation */}
+                        {page.usage.evaluation && (
+                             <div className="flex justify-between text-xs mb-1">
+                                <span className="text-slate-500">Evaluation:</span>
+                                <span className="font-mono text-slate-700">${page.usage.evaluation.cost.toFixed(4)}</span>
+                            </div>
+                        )}
+                        
+                        <div className="mt-2 pt-1 border-t border-slate-100 flex justify-between text-xs font-bold">
+                            <span className="text-slate-800">Total:</span>
+                            <span className="text-green-600">${page.usage.total.cost.toFixed(4)}</span>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -75,6 +119,17 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
                     title="View Prompt"
                 >
                     <MessageSquareText size={16} />
+                </button>
+            )}
+
+            {/* Retry Evaluation Button */}
+            {page.status === PageStatus.DONE && !page.isEvaluating && onRetryEvaluation && (
+                <button
+                    onClick={onRetryEvaluation}
+                    className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-indigo-600 transition-colors"
+                    title="Re-run Quality Evaluation"
+                >
+                    <ClipboardCheck size={16} />
                 </button>
             )}
 
@@ -180,16 +235,16 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
       </div>
       
       {/* Mobile-only stats footer */}
-      {page.usage && (
+      {page.usage && page.usage.total && (
           <div className="sm:hidden px-3 py-2 bg-slate-50 border-t border-slate-200 flex justify-between text-xs text-slate-500">
-               <span>Tokens: {page.usage.totalTokens.toLocaleString()}</span>
-               <span>Cost: ${page.usage.estimatedCost.toFixed(4)}</span>
+               <span>Tokens: {page.usage.total.totalTokens?.toLocaleString() || '0'}</span>
+               <span>Cost: ${page.usage.total.cost.toFixed(4)}</span>
           </div>
       )}
 
-      {/* Segments Modal */}
-      {showSegmentsModal && page.extractedSegments && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      {/* Segments Modal (Portal) */}
+      {showSegmentsModal && page.extractedSegments && createPortal(
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
                    <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                         <div className="flex items-center gap-2">
@@ -219,12 +274,13 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
                       </button>
                   </div>
               </div>
-          </div>
+          </div>,
+          document.body
       )}
 
-      {/* Prompt Modal */}
-      {showPromptModal && page.promptUsed && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      {/* Prompt Modal (Portal) */}
+      {showPromptModal && page.promptUsed && createPortal(
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
                    <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                         <div className="flex items-center gap-2">
@@ -254,12 +310,13 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
                       </button>
                   </div>
               </div>
-          </div>
+          </div>,
+          document.body
       )}
 
-      {/* Evaluation Modal Overlay */}
-      {showScoreModal && page.evaluation && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+      {/* Evaluation Modal Overlay (Portal) */}
+      {showScoreModal && page.evaluation && createPortal(
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
                   <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                       <div className="flex items-center gap-2">
@@ -319,7 +376,8 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry }) => {
                       </button>
                   </div>
               </div>
-          </div>
+          </div>,
+          document.body
       )}
     </div>
   );
