@@ -1,3 +1,4 @@
+
 export enum ProcessingStatus {
   IDLE = 'IDLE',
   CONVERTING_PDF = 'CONVERTING_PDF',
@@ -14,8 +15,8 @@ export enum PageStatus {
 }
 
 export enum TranslationMode {
-  DIRECT = 'DIRECT', // Existing: One-shot image to image
-  TWO_STEP = 'TWO_STEP' // New: Text Extraction -> Replacement
+  DIRECT = 'DIRECT',
+  TWO_STEP = 'TWO_STEP'
 }
 
 export interface UsageStats {
@@ -26,10 +27,10 @@ export interface UsageStats {
 }
 
 export interface TokenUsage {
-  extraction?: UsageStats; // Step 1 (Two-Step Mode)
-  translation: UsageStats; // Step 2 (Image Generation)
-  evaluation?: UsageStats; // Step 3 (QA)
-  total: UsageStats;       // Aggregated
+  extraction?: UsageStats;
+  translation: UsageStats;
+  evaluation?: UsageStats;
+  total: UsageStats;
 }
 
 export interface EvaluationScores {
@@ -38,7 +39,10 @@ export interface EvaluationScores {
   consistency: number;
   terminology: number;
   completeness: number;
-  formatPreservation: number; // New dimension
+  formatPreservation: number;
+  spelling: number;
+  trademarkProtection: number;
+  redundancyRemoval: number;
 }
 
 export interface EvaluationResult {
@@ -50,33 +54,46 @@ export interface EvaluationResult {
 
 export interface PageData {
   pageNumber: number;
-  originalImage: string; // Base64 data URL
-  translatedImage?: string; // Base64 data URL
+  originalImage: string;
+  translatedImage?: string;
   status: PageStatus;
   errorMessage?: string;
   usage?: TokenUsage;
   evaluation?: EvaluationResult;
   isEvaluating?: boolean;
-  promptUsed?: string; // The specific prompt used for this translation
-  extractedSegments?: string; // The raw text segments extracted in Step 1 of Two-Step mode
+  promptUsed?: string;
+  extractedSegments?: string;
+}
+
+// Full session state for saving/loading
+export interface TranslationProject {
+  version: string;
+  timestamp: number;
+  originalFileName: string;
+  pages: PageData[];
+  glossary: string;
+  targetLanguage: string;
+  sourceLanguage: string;
+  translationMode: TranslationMode;
 }
 
 export const SUPPORTED_LANGUAGES = [
-  { code: 'en', name: 'English (English)' },
+  { code: 'en', name: 'English (英语)' },
   { code: 'zh', name: 'Chinese (简体中文)' },
-  { code: 'es', name: 'Spanish (Español)' },
-  { code: 'fr', name: 'French (Français)' },
-  { code: 'de', name: 'German (Deutsch)' },
-  { code: 'ja', name: 'Japanese (日本語)' },
-  { code: 'ko', name: 'Korean (한국어)' },
-  { code: 'it', name: 'Italian (Italiano)' },
-  { code: 'pt', name: 'Portuguese (Português)' },
-  { code: 'ru', name: 'Russian (Русский)' },
-  { code: 'hi', name: 'Hindi (हिन्दी)' },
-  { code: 'ar', name: 'Arabic (العربية)' }
+  { code: 'es', name: 'Spanish (西班牙语)' },
+  { code: 'fr', name: 'French (法语)' },
+  { code: 'de', name: 'German (德语)' },
+  { code: 'ja', name: 'Japanese (日语)' },
+  { code: 'ko', name: 'Korean (韩语)' },
+  { code: 'it', name: 'Italian (意大利语)' },
+  { code: 'pt', name: 'Portuguese (葡萄牙语)' },
+  { code: 'ru', name: 'Russian (俄语)' },
+  { code: 'hi', name: 'Hindi (印地语)' },
+  { code: 'ar', name: 'Arabic (阿拉伯语)' },
+  { code: 'vi', name: 'Vietnamese (越南语)' }
 ];
 
 export const SOURCE_LANGUAGES = [
-  { code: 'auto', name: 'Auto (Detect)' },
+  { code: 'auto', name: 'Auto (自动检测)' },
   ...SUPPORTED_LANGUAGES
 ];
