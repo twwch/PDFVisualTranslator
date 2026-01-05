@@ -2,29 +2,40 @@
 import { GoogleGenAI, Schema, Type } from "@google/genai";
 import { TokenUsage, EvaluationResult, TranslationMode, UsageStats } from "../types";
 
+// We strictly use the model name requested for "Nano Banana Pro" functionality which is mapped to gemini-3-pro-image-preview
+// as per the instructions for "High-Quality Image Generation and Editing Tasks".
 const MODEL_NAME = 'gemini-3-pro-image-preview';
-const REASONING_MODEL_NAME = 'gemini-3-pro-preview'; 
+const REASONING_MODEL_NAME = 'gemini-3-flash-preview'; // For extraction and evaluation
 
+// Updated Pricing for Gemini 1.5 Pro / 3.0 Pro (Estimation)
 const PRICE_PER_1M_INPUT = 3.50;
 const PRICE_PER_1M_OUTPUT = 10.50;
 
+const SUPPORTED_ASPECT_RATIOS = [
+  { label: "1:1", value: 1.0 },
+  { label: "3:4", value: 3 / 4 },
+  { label: "4:3", value: 4 / 3 },
+  { label: "9:16", value: 9 / 16 },
+  { label: "16:9", value: 16 / 9 },
+];
+
 const calculateCost = (input: number, output: number): number => {
-    return ((input / 1_000_000) * PRICE_PER_1M_INPUT) + ((output / 1_000_000) * PRICE_PER_1M_OUTPUT);
+  return ((input / 1_000_000) * PRICE_PER_1M_INPUT) + ((output / 1_000_000) * PRICE_PER_1M_OUTPUT);
 };
 
 const getBestAspectRatio = (width: number, height: number): string => {
   const targetRatio = width / height;
-  const ratios = [
-    { label: "1:1", value: 1.0 }, { label: "3:4", value: 0.75 }, { label: "4:3", value: 1.33 },
-    { label: "9:16", value: 0.56 }, { label: "16:9", value: 1.77 }
-  ];
-  let best = ratios[0];
-  let minDiff = Math.abs(targetRatio - best.value);
-  for (const r of ratios) {
-    const d = Math.abs(targetRatio - r.value);
-    if (d < minDiff) { minDiff = d; best = r; }
+  let bestMatch = SUPPORTED_ASPECT_RATIOS[0];
+  let minDiff = Math.abs(targetRatio - bestMatch.value);
+
+  for (const ratio of SUPPORTED_ASPECT_RATIOS) {
+    const diff = Math.abs(targetRatio - ratio.value);
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestMatch = ratio;
+    }
   }
-  return best.label;
+  return bestMatch.label;
 };
 
 const getImageDimensions = (base64: string): Promise<{ width: number; height: number }> => {
@@ -36,173 +47,439 @@ const getImageDimensions = (base64: string): Promise<{ width: number; height: nu
   });
 };
 
+// Utility for delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- Step 1 of Engine 2: Extract and Translate Text ---
 const extractAndTranslateText = async (
-    base64Data: string, 
-    sourceLanguage: string, 
-    targetLanguage: string,
-    apiKey: string,
-    glossary?: string,
-    previousFeedback?: string 
+  base64Data: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  apiKey: string,
+  glossary?: string,
+  previousFeedback?: string
 ): Promise<{ mapping: string, usage: UsageStats }> => {
-    const ai = new GoogleGenAI({ apiKey });
-    const responseSchema: Schema = {
-        type: Type.ARRAY,
-        items: {
-            type: Type.OBJECT,
-            properties: {
-                original: { type: Type.STRING },
-                translated: { type: Type.STRING },
-                isTrademark: { type: Type.BOOLEAN }
-            },
-            required: ["original", "translated", "isTrademark"]
-        }
-    };
+  const ai = new GoogleGenAI({ apiKey });
 
-    let prompt = `
-    Role: Elite Localization Expert.
-    Goal: Extract and translate text for: ${targetLanguage}.
+  // Schema for structured extraction
+  const responseSchema: Schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        original: { type: Type.STRING, description: "Original text segment found in image" },
+        translated: { type: Type.STRING, description: "Translation in target language" },
+        location: { type: Type.STRING, description: "Brief description of location (e.g., Header, Table Row 1, Footer)" }
+      },
+      required: ["original", "translated"]
+    }
+  };
+
+  let prompt = `
+    Role: Senior Optical Character Recognition (OCR) and Translation Expert.
+    Task: Analyze the image and extract text segments for translation.
     
-    STRICT COMMANDS:
-    1. TRADEMARK NON-TRANSLATION: Brand names (proper nouns like "支盘地工") MUST remain in original script. 
-       - NEVER translate brand components (like translating "地工" to "Geotechnical") if they are part of a proprietary name. 
-       - DO NOT use Transliteration/Pinyin.
-    2. REDUNDANCY REMOVAL: Consolidate bilingual content into ${targetLanguage} ONLY.
-    3. GLOSSARY: ${glossary || "Use standard professional terms."}
+    1. Identify text in: ${sourceLanguage}.
+    2. Translate it to: ${targetLanguage}.
+    
+    GLOSSARY PROTOCOL (CRITICAL):
+    ${glossary ? `You MUST strictly follow this glossary mapping for specific terms:\n${glossary}` : "No specific glossary provided. Use standard professional terminology."}
+    
+    IMAGE PRESERVATION RULE (STRICT):
+    - Do NOT extract or translate text that is embedded inside graphical images, photographs, illustrations, or complex technical diagrams.
+    - ONLY extract body text, headings, footers, and text inside data tables.
+    - If a segment of text is part of a "picture", skip it entirely.
+    
+    COMPLETENESS PROTOCOL:
+    - Extract ALL text visible on the page, including headers, body text, data tables, and FOOTER information (e.g., company names, addresses, or copyright at the bottom).
+    - Directive: If it is part of the document structure or metadata (and not a pure decorative illustration), EXTRACT IT.
+    
+    QUALITY STANDARDS:
+    1. **Accuracy:** Preserve exact meaning.
+    2. **Fluency:** Native-level phrasing.
+    3. **Consistency:** Terminology must be uniform.
+    
+    SPECIAL RULE (ENGLISH PRESERVATION):
+    - If the target language is a Chinese variant (Simplified or Traditional):
+      - **KEEP ALL ENGLISH TEXT UNCHANGED.** Do NOT translate technical terms, product names, or any English phrases into Chinese.
+      - **BILINGUAL HANDLING:** If a segment contains both English and Chinese (e.g., "CONTENTS 目录"), KEEP the English part exactly as is and only convert the Chinese part to the target variant (e.g., "CONTENTS 目錄").
+      - Only convert between Chinese character variants (e.g., Simplified to Traditional) as required by the target.
     `;
 
-    const response = await ai.models.generateContent({
-        model: REASONING_MODEL_NAME,
-        contents: { parts: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: base64Data } }] },
-        config: { responseMimeType: "application/json", responseSchema, temperature: 0.1 }
-    });
+  if (previousFeedback) {
+    prompt += `
+    
+    --------------------------------------------------
+    CRITICAL RETRY INSTRUCTIONS:
+    User Feedback: "${previousFeedback}"
+    --------------------------------------------------
+        `;
+  }
 
-    const meta = response.usageMetadata;
-    const usage = {
-        inputTokens: meta?.promptTokenCount || 0,
-        outputTokens: meta?.candidatesTokenCount || 0,
-        totalTokens: (meta?.promptTokenCount || 0) + (meta?.candidatesTokenCount || 0),
-        cost: calculateCost(meta?.promptTokenCount || 0, meta?.candidatesTokenCount || 0)
-    };
+  const response = await ai.models.generateContent({
+    model: REASONING_MODEL_NAME,
+    contents: {
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: 'image/jpeg', data: base64Data } }
+      ]
+    },
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: responseSchema,
+      temperature: 0.1
+    }
+  });
 
-    const segments = JSON.parse(response.text || "[]");
-    const mapping = segments.map((s: any) => `${s.isTrademark ? '[BRAND]' : ''} "${s.original}" -> "${s.translated}"`).join('\n');
-    return { mapping, usage };
+  const usageMetadata = response.usageMetadata;
+  const inputTokens = usageMetadata?.promptTokenCount || 0;
+  const outputTokens = usageMetadata?.candidatesTokenCount || 0;
+
+  const usage: UsageStats = {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    cost: calculateCost(inputTokens, outputTokens),
+    modelName: REASONING_MODEL_NAME,
+    type: 'extraction',
+    prompt: prompt,
+    timestamp: Date.now()
+  };
+
+  const jsonText = response.text || "[]";
+  let segments = [];
+  try {
+    segments = JSON.parse(jsonText);
+  } catch (e) {
+    console.warn("Failed to parse extraction JSON", e);
+  }
+
+  const mappingString = segments.map((s: any, i: number) =>
+    `Segment ${i + 1} [${s.location || 'Text'}]: "${s.original}" => "${s.translated}"`
+  ).join('\n');
+
+  return { mapping: mappingString, usage };
 };
+
 
 export const translateImage = async (
   base64Image: string,
   targetLanguage: string,
   sourceLanguage: string = 'Auto (Detect)',
-  mode: TranslationMode = TranslationMode.DIRECT,
   glossary?: string,
-  refinementFeedback?: string 
+  previousSuggestions?: string,
+  previousUsage?: TokenUsage
+): Promise<{ image: string; usage: TokenUsage; promptUsed: string; extractedSegments?: string }> => {
+  return translateImageWithRetry(
+    base64Image, targetLanguage, sourceLanguage, glossary, 3, previousSuggestions,
+    previousUsage?.extraction || [], previousUsage?.translation || [], previousUsage?.evaluation || []
+  );
+};
+
+const translateImageWithRetry = async (
+  base64Image: string,
+  targetLanguage: string,
+  sourceLanguage: string,
+  glossary?: string,
+  retries = 3,
+  previousSuggestions?: string,
+  accumulatedExtractionUsage: UsageStats[] = [],
+  accumulatedTranslationUsage: UsageStats[] = [],
+  accumulatedEvaluationUsage: UsageStats[] = []
 ): Promise<{ image: string; usage: TokenUsage; promptUsed: string; extractedSegments?: string }> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key missing");
+  if (!apiKey) {
+    throw new Error("API Key not found in environment.");
+  }
+
   const ai = new GoogleGenAI({ apiKey });
   const base64Data = base64Image.split(',')[1];
   const { width, height } = await getImageDimensions(base64Image);
   const aspectRatio = getBestAspectRatio(width, height);
+  const isChineseTarget = targetLanguage.toLowerCase().includes('chinese') || targetLanguage.includes('中文') || targetLanguage.includes('zh');
+  const isTraditionalHK = targetLanguage.includes('香港') || targetLanguage.includes('HK') || targetLanguage.includes('繁体');
 
-  let extractionUsage: UsageStats | undefined;
-  let mapping = "";
-  if (mode === TranslationMode.TWO_STEP) {
-      const ext = await extractAndTranslateText(base64Data, sourceLanguage, targetLanguage, apiKey, glossary, refinementFeedback);
-      mapping = ext.mapping;
-      extractionUsage = ext.usage;
+  let currentExtractionUsage: UsageStats | undefined;
+  let extractedTextMapping = "";
+  if (accumulatedExtractionUsage.length === 0) {
+    try {
+      const extraction = await extractAndTranslateText(base64Data, sourceLanguage, targetLanguage, apiKey, glossary, previousSuggestions);
+      extractedTextMapping = extraction.mapping;
+      currentExtractionUsage = extraction.usage;
+    } catch (e) {
+      console.warn("Step 1 (Extraction) failed", e);
+      throw new Error(`Text extraction failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
-  const prompt = `**Role:** Elite Localization Visual Engine. Target: ${targetLanguage}.
-**Constraints:**
-1. **TRADEMARK PROTECTION:** Keep Brand names (e.g. 支盘地工) original. DO NOT translate or transliterate.
-2. **REDUNDANCY REMOVAL:** Consolidate bilingual content.
-3. **STYLE:** Match font and layout.
+  const updatedExtractionUsage = currentExtractionUsage
+    ? [...accumulatedExtractionUsage, currentExtractionUsage]
+    : accumulatedExtractionUsage;
 
-${mode === TranslationMode.TWO_STEP ? `**MAPPING:**\n${mapping}` : `**GLOSSARY:**\n${glossary || "None"}`}
-${refinementFeedback ? `**REFINEMENT FEEDBACK:** ${refinementFeedback}` : ""}
+  let prompt = `**Role:** Elite Localization Engine (Visual Replacement Specialist)
+**Task:** Replace source text with: "${targetLanguage}".
+
+**IMAGE PRESERVATION RULE (MANDATORY):**
+- **DO NOT TRANSLATE PICTURES:** If the page contains photographs, graphical logos, or complex diagrams/illustrations, leave them EXACTLY as they are. 
+- Do NOT overlay translated text on top of images or graphics. 
+- ONLY translate text that is part of the document's body, headings, tables, footers, or structural layout. 
+- **CRITICAL:** Ensure text at the very bottom of the page (e.g., corporate info, small print) is replaced according to the mapping.
+
+**GLOSSARY ENFORCEMENT:**
+${glossary ? `You MUST strictly use the following translations for specified terms:\n${glossary}` : "No glossary provided."}
+
+**ENGINE MODE: PURE VISUAL REPLACEMENT**
+Use the provided mapping. 
+1. **TRUST THE MAPPING:** The text below already incorporates the glossary.
+2. **REPLACE ONLY:** Erase original text (matching background) and print translated text.
+3. **STYLE CLONING:** Match font, weight, color, and size exactly.
+
+**TEXT MAPPING TO APPLY:**
+${extractedTextMapping}
 `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: { parts: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: base64Data } }] },
-    config: { imageConfig: { imageSize: "4K", aspectRatio: aspectRatio } }
-  });
+  if (isChineseTarget) {
+    prompt += `
+**CRITICAL: CHINESE LOCALIZATION**
+- Replace all Japanese Kanji/Kana or foreign script with Chinese Characters.
+- **ENGLISH PRESERVATION:** KEEP ALL ENGLISH TEXT (names, technical terms, code) EXACTLY AS IT IS. Do NOT translate English to Chinese. 
+- **BILINGUAL SEGMENTS:** If the mapping shows a segment with both English and Chinese, preserve the English part and only use the Chinese part of the translated mapping.
+`;
+    if (isTraditionalHK) {
+      prompt += `- Use Traditional Chinese (Hong Kong standard). Do NOT use Simplified Chinese or Japanese glyph variants.\n`;
+    } else {
+      prompt += `- Use Standard Simplified Chinese. Do NOT use Japanese glyph variants. Use mainland China standard Hanzi.\n`;
+    }
+  }
 
-  const meta = response.usageMetadata;
-  const translationUsage = {
-      inputTokens: meta?.promptTokenCount || 0, outputTokens: meta?.candidatesTokenCount || 0,
-      totalTokens: (meta?.promptTokenCount || 0) + (meta?.candidatesTokenCount || 0), cost: calculateCost(meta?.promptTokenCount || 0, meta?.candidatesTokenCount || 0)
-  };
+  prompt += `
+**Output:**
+- A single image.
+- Resolution: 4K (Pixel-Perfect).
+- Aspect Ratio: Match Original.
+`;
 
-  const part = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
-  return {
-      image: `data:image/png;base64,${part?.inlineData?.data}`,
-      usage: { extraction: extractionUsage, translation: translationUsage, total: { inputTokens: (extractionUsage?.inputTokens || 0) + translationUsage.inputTokens, outputTokens: (extractionUsage?.outputTokens || 0) + translationUsage.outputTokens, totalTokens: (extractionUsage?.totalTokens || 0) + translationUsage.totalTokens, cost: (extractionUsage?.cost || 0) + translationUsage.cost } },
-      promptUsed: prompt,
-      extractedSegments: mapping || undefined
-  };
+  if (previousSuggestions) {
+    prompt += `\n**FEEDBACK FROM PREVIOUS ATTEMPT:** "${previousSuggestions}"\n`;
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
+        ],
+      },
+      config: {
+        imageConfig: {
+          imageSize: "4K",
+          aspectRatio: aspectRatio
+        }
+      }
+    });
+
+    const step2Meta = response.usageMetadata;
+    const s2Input = step2Meta?.promptTokenCount || 0;
+    const s2Output = step2Meta?.candidatesTokenCount || 0;
+
+    const currentTranslationUsage: UsageStats = {
+      inputTokens: s2Input,
+      outputTokens: s2Output,
+      totalTokens: s2Input + s2Output,
+      cost: calculateCost(s2Input, s2Output),
+      modelName: MODEL_NAME,
+      type: 'translation',
+      prompt: prompt,
+      timestamp: Date.now()
+    };
+
+    const updatedTranslationUsage = [...accumulatedTranslationUsage, currentTranslationUsage];
+
+    const totalInput = updatedExtractionUsage.reduce((acc, u) => acc + u.inputTokens, 0) +
+      updatedTranslationUsage.reduce((acc, u) => acc + u.inputTokens, 0) +
+      accumulatedEvaluationUsage.reduce((acc, u) => acc + u.inputTokens, 0);
+
+    const totalOutput = updatedExtractionUsage.reduce((acc, u) => acc + u.outputTokens, 0) +
+      updatedTranslationUsage.reduce((acc, u) => acc + u.outputTokens, 0) +
+      accumulatedEvaluationUsage.reduce((acc, u) => acc + u.outputTokens, 0);
+
+    const totalCost = updatedExtractionUsage.reduce((acc, u) => acc + u.cost, 0) +
+      updatedTranslationUsage.reduce((acc, u) => acc + u.cost, 0) +
+      accumulatedEvaluationUsage.reduce((acc, u) => acc + u.cost, 0);
+
+    const totalUsage: TokenUsage = {
+      extraction: updatedExtractionUsage.length > 0 ? updatedExtractionUsage : undefined,
+      translation: updatedTranslationUsage,
+      evaluation: accumulatedEvaluationUsage.length > 0 ? accumulatedEvaluationUsage : undefined,
+      total: {
+        inputTokens: totalInput,
+        outputTokens: totalOutput,
+        totalTokens: totalInput + totalOutput,
+        cost: totalCost
+      }
+    };
+
+    const parts = response.candidates?.[0]?.content?.parts;
+    if (parts) {
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.data) {
+          return {
+            image: `data:image/png;base64,${part.inlineData.data}`,
+            usage: totalUsage,
+            promptUsed: prompt,
+            extractedSegments: extractedTextMapping || undefined
+          };
+        }
+      }
+    }
+
+    throw new Error("No image data returned from Gemini.");
+
+  } catch (error: any) {
+    const errorMessage = error.message || JSON.stringify(error);
+    const isQuotaError = errorMessage.includes("429") || errorMessage.includes("403") || errorMessage.includes("quota");
+    const isInternalError = errorMessage.includes("500") || errorMessage.includes("INTERNAL");
+
+    if ((isQuotaError || isInternalError) && retries > 0) {
+      console.log(`Error encountered, retrying... (${retries} attempts left)`);
+      // When retrying, we keep track of the usage from the failed attempt if possible
+      // However, the Google SDK might not return usageMetadata on error.
+      // For now, we just pass the accumulated usage forward.
+      await delay(10000);
+      return translateImageWithRetry(
+        base64Image, targetLanguage, sourceLanguage, glossary, retries - 1,
+        previousSuggestions, updatedExtractionUsage, accumulatedTranslationUsage,
+        accumulatedEvaluationUsage
+      );
+    }
+    throw error;
+  }
 };
 
+// Fixed signature: added glossary parameter before retries
 export const evaluateTranslation = async (
   originalImage: string,
   translatedImage: string,
   targetLanguage: string,
   sourceLanguage: string = 'Auto (Detect)',
   glossary?: string,
-  retries = 3
-): Promise<{ result: EvaluationResult, usage: UsageStats }> => {
+  retries = 3,
+  accumulatedUsage: UsageStats[] = []
+): Promise<{ result: EvaluationResult, usage: UsageStats[] }> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("API Key missing");
   const ai = new GoogleGenAI({ apiKey });
-  
+
+  const originalData = originalImage.split(',')[1];
+  const translatedData = translatedImage.split(',')[1];
+
+  // Updated prompt to include all 9 evaluation criteria required by EvaluationScores
   const prompt = `
-    Quality Audit Task.
-    GLOSSARY (Truth): ${glossary || "None"}
+    Professional Translation Quality Audit.
+    Compare Original and Translated.
     
-    AUDIT PROTOCOL (ANTI-MISJUDGMENT):
-    1. **TRADEMARK PROTECTED**: If a Brand name (e.g. "支盘地工") is kept original and NOT translated (even if it contains translatable words like "Technology" or "Development"), this is the HIGHEST standard. DO NOT penalize for "literal omission". Brands are proper nouns.
-    2. **REDUNDANCY REMOVAL**: Consolidating bilingual source (CN+EN) into single target is the CORRECT goal. DO NOT penalize for "missing text".
-    3. **ENGINE PREFERENCE**: Objective evaluation based on professional localization standards.
+    - Target Language: ${targetLanguage}
+    ${glossary ? `- Glossary protocol: ${glossary}` : ''}
     
-    Evaluate 1-10: Accuracy, Fluency, Consistency, Terminology, Completeness, Format, Spelling, Trademark Protection, Redundancy Removal.
-    Output JSON. Reason/Suggestions in Simplified Chinese.
+    Evaluate (1-10):
+    1. Accuracy
+    2. Fluency
+    3. Consistency
+    4. Terminology
+    5. Completeness (Penalty if pictures were translated or if target script is mixed)
+    6. Format Preservation (Penalty if layout is stretched)
+    7. Spelling: Check for typos.
+    8. Trademark Protection: Verify brand names are untouched.
+    9. Redundancy Removal: Consolidate bilingual content.
+
+    IMAGE PRESERVATION CHECK:
+    - If you see that text inside an embedded photograph or a graphical illustration WAS translated, decrease the 'completeness' and 'formatPreservation' scores. We expect images to be UNTOUCHED.
+
+    Output in JSON. 'reason' and 'suggestions' in Simplified Chinese.
   `;
 
+  // Updated schema to include all 9 properties of EvaluationScores
   const responseSchema: Schema = {
     type: Type.OBJECT,
     properties: {
       scores: {
         type: Type.OBJECT,
         properties: {
-          accuracy: { type: Type.NUMBER }, fluency: { type: Type.NUMBER }, consistency: { type: Type.NUMBER },
-          terminology: { type: Type.NUMBER }, completeness: { type: Type.NUMBER }, formatPreservation: { type: Type.NUMBER },
-          spelling: { type: Type.NUMBER }, trademarkProtection: { type: Type.NUMBER }, redundancyRemoval: { type: Type.NUMBER }
+          accuracy: { type: Type.NUMBER },
+          fluency: { type: Type.NUMBER },
+          consistency: { type: Type.NUMBER },
+          terminology: { type: Type.NUMBER },
+          completeness: { type: Type.NUMBER },
+          formatPreservation: { type: Type.NUMBER },
+          spelling: { type: Type.NUMBER },
+          trademarkProtection: { type: Type.NUMBER },
+          redundancyRemoval: { type: Type.NUMBER },
         },
-        required: ["accuracy", "fluency", "consistency", "terminology", "completeness", "formatPreservation", "spelling", "trademarkProtection", "redundancyRemoval"]
+        required: ["accuracy", "fluency", "consistency", "terminology", "completeness", "formatPreservation", "spelling", "trademarkProtection", "redundancyRemoval"],
       },
       reason: { type: Type.STRING },
-      suggestions: { type: Type.STRING }
+      suggestions: { type: Type.STRING },
     },
-    required: ["scores", "reason", "suggestions"]
+    required: ["scores", "reason", "suggestions"],
   };
 
   try {
     const response = await ai.models.generateContent({
       model: REASONING_MODEL_NAME,
-      contents: { parts: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: originalImage.split(',')[1] } }, { inlineData: { mimeType: 'image/jpeg', data: translatedImage.split(',')[1] } }] },
-      config: { responseMimeType: "application/json", responseSchema }
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: 'image/jpeg', data: originalData } },
+          { inlineData: { mimeType: 'image/jpeg', data: translatedData } },
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
     });
 
-    const meta = response.usageMetadata;
-    const usage = { inputTokens: meta?.promptTokenCount || 0, outputTokens: meta?.candidatesTokenCount || 0, totalTokens: (meta?.promptTokenCount || 0) + (meta?.candidatesTokenCount || 0), cost: calculateCost(meta?.promptTokenCount || 0, meta?.candidatesTokenCount || 0) };
-    const res = JSON.parse(response.text || "{}");
-    const s = res.scores;
-    const avg = (s.accuracy + s.fluency + s.consistency + s.terminology + s.completeness + s.formatPreservation + s.spelling + s.trademarkProtection + s.redundancyRemoval) / 9;
-    return { result: { ...res, averageScore: parseFloat(avg.toFixed(1)) }, usage };
-  } catch (e: any) {
-    if (retries > 0) { await delay(10000); return evaluateTranslation(originalImage, translatedImage, targetLanguage, sourceLanguage, glossary, retries - 1); }
-    throw e;
+    const usageMetadata = response.usageMetadata;
+    const inputTokens = usageMetadata?.promptTokenCount || 0;
+    const outputTokens = usageMetadata?.candidatesTokenCount || 0;
+
+    const currentUsage: UsageStats = {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cost: calculateCost(inputTokens, outputTokens),
+      modelName: REASONING_MODEL_NAME,
+      type: 'evaluation',
+      prompt: prompt,
+      timestamp: Date.now()
+    };
+
+    const totalUpdatedUsage = [...accumulatedUsage, currentUsage];
+    const totalInput = totalUpdatedUsage.reduce((acc, u) => acc + u.inputTokens, 0);
+    const totalOutput = totalUpdatedUsage.reduce((acc, u) => acc + u.outputTokens, 0);
+    const totalCost = totalUpdatedUsage.reduce((acc, u) => acc + u.cost, 0);
+
+    const jsonText = response.text || "{}";
+    const resultJson = JSON.parse(jsonText);
+    const scores = resultJson.scores;
+    // Updated calculation to divide by 9 criteria
+    const avg = (scores.accuracy + scores.fluency + scores.consistency + scores.terminology + scores.completeness + scores.formatPreservation + scores.spelling + scores.trademarkProtection + scores.redundancyRemoval) / 9;
+
+    return {
+      result: { scores, averageScore: parseFloat(avg.toFixed(1)), reason: resultJson.reason, suggestions: resultJson.suggestions },
+      usage: totalUpdatedUsage
+    };
+  } catch (error: any) {
+    if (retries > 0) {
+      await delay(10000);
+      // Fixed: Ensure glossary is passed to retry call
+      return evaluateTranslation(originalImage, translatedImage, targetLanguage, sourceLanguage, glossary, retries - 1, accumulatedUsage);
+    }
+    return {
+      result: { scores: { accuracy: 0, fluency: 0, consistency: 0, terminology: 0, completeness: 0, formatPreservation: 0, spelling: 0, trademarkProtection: 0, redundancyRemoval: 0 }, averageScore: 0, reason: "评估服务故障", suggestions: "" },
+      usage: [{ inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0, modelName: REASONING_MODEL_NAME, type: 'evaluation' }]
+    };
   }
 };

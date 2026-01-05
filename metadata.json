@@ -1,5 +1,5 @@
 {
   "name": "PDF Visual Translator",
-  "description": "Upload a PDF, translate pages visually using Gemini 3 Pro (Nano Banana Pro), and download the translated PDF.",
+  "description": "Upload a PDF, translate pages visually using Gemini 3 (Nano Banana Pro), and download the translated PDF.",
   "requestFramePermissions": []
 }

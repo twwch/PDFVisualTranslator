@@ -1,40 +1,105 @@
 # PDF Visual Translator
 
-使用 Google 的 Gemini 3 Pro (Nano Banana Pro) 视觉翻译 PDF 文档，同时保持其精确的布局、字体颜色和格式。
+An advanced AI-powered document translation tool that leverages Google Gemini models to perform **visual-aware translation**. Unlike traditional OCR tools, this project preserves the exact layout, font styles, colors, and background of the original PDF while overlaying perfectly localized text.
 
-![产品截图](images/20251128-185643.jpg)
+---
 
-![产品截图 2](images/20251128184427_4311_787.png)
+## 🚀 Key Features
 
+### 1. Dual-Stage AI Translation Engine
+The heart of the application is a sophisticated two-step process:
+- **Phase 1 (Extraction & Reasoning):** Uses Gemini Flash to perform high-precision OCR and contextual translation, respecting custom glossaries and linguistic rules.
+- **Phase 2 (Visual Reconstruction):** Uses Gemini Pro (Visual Specialist) to erase original text and "redraw" the translated segments using pixel-perfect alignment and style matching.
 
-## 功能特性
+### 2. Professional Quality Evaluation
+- **Automated Audit:** Every translation is automatically evaluated by a secondary AI agent.
+- **Detailed Metrics:** Scores across Accuracy, Fluency, Consistency, Terminology, Completeness, and Format Preservation.
+- **Optimization Suggestions:** Context-aware feedback provided for every page to ensure professional-grade output.
 
--   **视觉翻译**：在保持原始视觉保真度的同时翻译图像中的文本。
--   **布局保留**：保持原始文档的结构、背景和样式。
--   **PDF 支持**：上传多页 PDF 进行处理。
--   **对照视图**：生成原始页面和翻译页面的并排对照 PDF。
--   **Gemini 3 Pro**：由最新的 Gemini 模型提供支持，用于高质量的图像生成和编辑。
+### 3. Advanced Linguistic Controls
+- **Bilingual Preservation:** Smartly keeps English headers, technical terms, and product names (e.g., "CONTENTS 目录" becomes "CONTENTS 目錄").
+- **Glossary Enforcement:** Upload or paste custom term mappings to ensure industry-specific accuracy.
+- **Hong Kong Localization:** Dedicated support for Traditional Chinese (Hong Kong) standards.
 
-## 环境要求
+### 4. Enterprise Export Options
+- **Translated PDF:** High-fidelity document mirroring the original layout.
+- **Comparison View:** Side-by-side (Original vs. Translated) PDF for verification.
+- **Evaluation Report:** Detailed JPEG/PDF reports containing AI scores and suggestions for each page.
 
--   Node.js
+---
 
-## 配置
+## 🛠 Technology Stack
 
-1.  从 [Google AI Studio](https://aistudio.google.com/) 获取 Gemini API 密钥。
-2.  在 `.env.local` 中设置 `API_KEY`：
-    ```bash
-    API_KEY=your_api_key_here
-    ```
-    *（注意：如果在 AI Studio 环境中运行，该应用程序也支持通过界面选择密钥）*
+- **Frontend:** React + Vite + Tailwind CSS
+- **AI Backend:** Google Gemini API (Pro & Flash)
+- **PDF Processing:** PDF.js (Parsing) & jsPDF (Generating)
+- **Icons:** Lucide React
 
-## 本地运行
+---
 
-1.  安装依赖：
-    ```bash
-    npm install
-    ```
-2.  运行应用：
-    ```bash
-    npm run dev
-    ```
+## 📦 Getting Started
+
+### Prerequisites
+- **Node.js** (LTS version recommended)
+- **Google AI Studio API Key** (Get it [here](https://aistudio.google.com/))
+
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone <repo-url>
+   cd pdf-visual-translator
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Set up environment:
+   Create a `.env.local` file or set the environment variable:
+   ```bash
+   GEMINI_API_KEY=your_api_key_here
+   ```
+
+### Running Locally
+```bash
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+## 🔄 Translation Workflow
+
+```mermaid
+graph TD
+    Start([Upload PDF/Image]) --> PDF{Is PDF?}
+    PDF -->|Yes| Conv[PDF to Image Conversion]
+    PDF -->|No| Process[Start Translation Engine]
+    Conv --> Process
+    
+    subgraph Engine [Dual-Stage Engine]
+        Process --> Step1[<b>Step 1: Reasoning</b><br/>Gemini Flash performs OCR,<br/>Terminology application,<br/>and Contextual Translation]
+        Step1 --> Step2[<b>Step 2: Visual Editing</b><br/>Gemini Pro erases original text,<br/>redraws translated text,<br/>and matches styles]
+    end
+    
+    Step2 --> Eval[<b>AI Evaluation</b><br/>Quality audit & Scoring]
+    Eval --> Export([Export: PDF / Comparison / Report])
+```
+
+---
+
+## 🧬 Project Architecture
+
+```mermaid
+graph TD
+    UI[React Interface] --> PS[PDF Service]
+    UI --> GS[Gemini Service]
+    PS -->|Convert to Image| UI
+    GS -->|Step 1: Reasoning| Flash[Gemini Flash]
+    GS -->|Step 2: Edit| Pro[Gemini Pro Visual]
+    UI -->|Export| jsPDF[jsPDF Engine]
+```
+
+---
+
+## 🛡 License
+This project is licensed under the MIT License.

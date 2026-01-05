@@ -15,7 +15,6 @@ export enum PageStatus {
 }
 
 export enum TranslationMode {
-  DIRECT = 'DIRECT',
   TWO_STEP = 'TWO_STEP'
 }
 
@@ -24,13 +23,22 @@ export interface UsageStats {
   outputTokens: number;
   totalTokens: number;
   cost: number;
+  modelName: string;
+  type?: 'extraction' | 'translation' | 'evaluation';
+  prompt?: string;
+  timestamp?: number;
 }
 
 export interface TokenUsage {
-  extraction?: UsageStats;
-  translation: UsageStats;
-  evaluation?: UsageStats;
-  total: UsageStats;
+  extraction?: UsageStats[];
+  translation: UsageStats[];
+  evaluation?: UsageStats[];
+  total: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cost: number;
+  };
 }
 
 export interface EvaluationScores {
@@ -80,6 +88,7 @@ export interface TranslationProject {
 export const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English (英语)' },
   { code: 'zh', name: 'Chinese (简体中文)' },
+  { code: 'zh-HK', name: 'Traditional Chinese (香港繁体)' },
   { code: 'es', name: 'Spanish (西班牙语)' },
   { code: 'fr', name: 'French (法语)' },
   { code: 'de', name: 'German (德语)' },
