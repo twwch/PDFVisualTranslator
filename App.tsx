@@ -4,6 +4,7 @@ import { Upload, FileText, Download, Play, AlertTriangle, Key, Columns, ImageIco
 import { PageData, PageStatus, ProcessingStatus, SUPPORTED_LANGUAGES, SOURCE_LANGUAGES, TranslationMode, TranslationProject, UsageStats } from './types';
 import { convertPdfToImages, convertFileToBase64, generatePdfFromImages, generateComparisonPdf, getPdfPageCount, generateEvaluationPdf } from './services/pdfService';
 import { translateImage, evaluateTranslation } from './services/geminiService';
+import JSZip from 'jszip';
 import PageCard from './components/PageCard';
 import ProgressBar from './components/ProgressBar';
 import LanguageSelector from './components/LanguageSelector';
@@ -12,7 +13,7 @@ import { StatsModal } from './components/StatsModal';
 const App: React.FC = () => {
     const [pages, setPages] = useState<PageData[]>([]);
     const [appStatus, setAppStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
-    const [downloadingType, setDownloadingType] = useState<'translated' | 'comparison' | 'cost' | 'evaluation' | 'project' | null>(null);
+    const [downloadingType, setDownloadingType] = useState<'translated' | 'comparison' | 'cost' | 'evaluation' | 'project' | 'images' | null>(null);
     const [targetLanguage, setTargetLanguage] = useState<string>('');
     const [sourceLanguage, setSourceLanguage] = useState<string>('Auto (自动检测)');
     const [apiKeyReady, setApiKeyReady] = useState<boolean>(false);
@@ -298,7 +299,7 @@ const App: React.FC = () => {
         }
     };
 
-    const handleDownload = async (type: 'translated' | 'comparison' | 'evaluation') => {
+    const handleDownload = async (type: 'translated' | 'comparison' | 'evaluation' | 'images') => {
         try {
             const finishedPages = pages.filter(p => p.status === PageStatus.DONE && p.translatedImage);
             if (finishedPages.length === 0) return;
@@ -317,6 +318,14 @@ const App: React.FC = () => {
                 if (evaluatedPages.length === 0) throw new Error("尚未生成评估数据。");
                 blob = await generateEvaluationPdf(evaluatedPages);
                 filename = `${originalFileName}_Evaluation_Report.pdf`;
+            } else if (type === 'images') {
+                const zip = new JSZip();
+                finishedPages.forEach((p, index) => {
+                    const base64Data = p.translatedImage!.split(',')[1];
+                    zip.file(`${originalFileName}_Page_${p.pageNumber}.png`, base64Data, { base64: true });
+                });
+                blob = await zip.generateAsync({ type: 'blob' });
+                filename = `${originalFileName}_Translated_Images.zip`;
             } else {
                 blob = await generatePdfFromImages(finishedPages.map(p => p.translatedImage as string));
                 filename = `${originalFileName}_Translated.pdf`;
@@ -578,6 +587,17 @@ const App: React.FC = () => {
                                                     </div>
                                                 </button>
                                             )}
+
+                                            <button
+                                                onClick={() => { handleDownload('images'); setShowDownloadDropdown(false); }}
+                                                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left border-t border-slate-50 mt-1 pt-3"
+                                            >
+                                                <div className="bg-amber-100 p-2 rounded-lg text-amber-600"><ImageIcon size={18} /></div>
+                                                <div className="flex flex-col">
+                                                    <span className="font-bold">下载图片 ZIP</span>
+                                                    <span className="text-[10px] text-slate-400">所有已翻译页面的图片打包</span>
+                                                </div>
+                                            </button>
                                         </div>
                                     </>
                                 )}

@@ -10,13 +10,15 @@
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "jspdf": "^4.0.0",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.555.0",
-    "jspdf": "^3.0.4",
-    "pdfjs-dist": "4.4.168"
+    "pdfjs-dist": "4.4.168",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@types/jszip": "^3.4.0",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
