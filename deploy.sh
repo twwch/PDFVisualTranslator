@@ -2,7 +2,7 @@
 
 npm run build
 
-cp -r dist hf-deploy
+cp -r dist/* hf-deploy
 
 cd hf-deploy
 
