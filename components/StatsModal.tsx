@@ -90,12 +90,12 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, pages }
                                                     </span>
                                                 </td>
                                                 <td className="px-4 py-4">
-                                                    <span className="text-xs text-slate-600 font-mono" title={u.modelName}>{u.modelName.split('/').pop()}</span>
+                                                    <span className="text-xs text-slate-600 font-mono" title={u.modelName}>{(u.modelName || 'unknown').split('/').pop()}</span>
                                                 </td>
-                                                <td className="px-4 py-4 text-sm text-slate-600">{u.inputTokens.toLocaleString()}</td>
-                                                <td className="px-4 py-4 text-sm text-slate-600">{u.outputTokens.toLocaleString()}</td>
-                                                <td className="px-4 py-4 text-sm font-bold text-slate-700">{u.totalTokens.toLocaleString()}</td>
-                                                <td className="px-4 py-4 text-sm font-bold text-indigo-600 text-right font-mono">${u.cost.toFixed(5)}</td>
+                                                <td className="px-4 py-4 text-sm text-slate-600">{(u.inputTokens || 0).toLocaleString()}</td>
+                                                <td className="px-4 py-4 text-sm text-slate-600">{(u.outputTokens || 0).toLocaleString()}</td>
+                                                <td className="px-4 py-4 text-sm font-bold text-slate-700">{(u.totalTokens || 0).toLocaleString()}</td>
+                                                <td className="px-4 py-4 text-sm font-bold text-indigo-600 text-right font-mono">${(u.cost || 0).toFixed(5)}</td>
                                             </tr>
                                             {u.prompt && (
                                                 <tr className="bg-slate-50/30">

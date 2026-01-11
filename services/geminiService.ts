@@ -146,19 +146,28 @@ const extractAndTranslateText = async (
     timestamp: Date.now()
   };
 
-  const jsonText = response.text || "[]";
+  let jsonText = "[]";
+  try {
+    // response.text is a getter in this version/environment, but it can throw if there are no candidates
+    jsonText = (response as any).text || "[]";
+  } catch (e) {
+    console.warn("Failed to get text from response", e);
+  }
+
   let segments = [];
   try {
     segments = JSON.parse(jsonText);
   } catch (e) {
     console.warn("Failed to parse extraction JSON", e);
+    segments = [];
   }
 
-  const mappingString = segments.map((s: any, i: number) =>
-    `Segment ${i + 1} [${s.location || 'Text'}]: "${s.original}" => "${s.translated}"`
+  const segmentsArray = Array.isArray(segments) ? segments : [];
+  const mappingString = segmentsArray.map((s: any, i: number) =>
+    `Segment ${i + 1} [${s?.location || 'Text'}]: "${s?.original || ''}" => "${s?.translated || ''}"`
   ).join('\n');
 
-  return { mapping: mappingString, usage };
+  return { mapping: mappingString || "No text extracted", usage };
 };
 
 
@@ -461,25 +470,58 @@ export const evaluateTranslation = async (
     const totalOutput = totalUpdatedUsage.reduce((acc, u) => acc + u.outputTokens, 0);
     const totalCost = totalUpdatedUsage.reduce((acc, u) => acc + u.cost, 0);
 
-    const jsonText = response.text || "{}";
-    const resultJson = JSON.parse(jsonText);
-    const scores = resultJson.scores;
-    // Updated calculation to divide by 9 criteria
-    const avg = (scores.accuracy + scores.fluency + scores.consistency + scores.terminology + scores.completeness + scores.formatPreservation + scores.spelling + scores.trademarkProtection + scores.redundancyRemoval) / 9;
+    let jsonText = "{}";
+    try {
+      jsonText = (response as any).text || "{}";
+    } catch (e) {
+      console.warn("Failed to get text from evaluation response", e);
+    }
+
+    let resultJson: any = {};
+    try {
+      resultJson = JSON.parse(jsonText);
+    } catch (e) {
+      console.warn("Failed to parse evaluation JSON", e);
+    }
+
+    const scores = resultJson?.scores || { accuracy: 0, fluency: 0, consistency: 0, terminology: 0, completeness: 0, formatPreservation: 0, spelling: 0, trademarkProtection: 0, redundancyRemoval: 0 };
+    // Ensure all score fields exist to avoid NaN in average
+    const safeScores = {
+      accuracy: scores.accuracy || 0,
+      fluency: scores.fluency || 0,
+      consistency: scores.consistency || 0,
+      terminology: scores.terminology || 0,
+      completeness: scores.completeness || 0,
+      formatPreservation: scores.formatPreservation || 0,
+      spelling: scores.spelling || 0,
+      trademarkProtection: scores.trademarkProtection || 0,
+      redundancyRemoval: scores.redundancyRemoval || 0,
+    };
+
+    const avg = (safeScores.accuracy + safeScores.fluency + safeScores.consistency + safeScores.terminology + safeScores.completeness + safeScores.formatPreservation + safeScores.spelling + safeScores.trademarkProtection + safeScores.redundancyRemoval) / 9;
 
     return {
-      result: { scores, averageScore: parseFloat(avg.toFixed(1)), reason: resultJson.reason, suggestions: resultJson.suggestions },
+      result: {
+        scores: safeScores,
+        averageScore: parseFloat(avg.toFixed(1)),
+        reason: resultJson?.reason || "解析评估结果失败",
+        suggestions: resultJson?.suggestions || ""
+      },
       usage: totalUpdatedUsage
     };
   } catch (error: any) {
     if (retries > 0) {
       await delay(10000);
-      // Fixed: Ensure glossary is passed to retry call
       return evaluateTranslation(originalImage, translatedImage, targetLanguage, sourceLanguage, glossary, retries - 1, accumulatedUsage);
     }
     return {
-      result: { scores: { accuracy: 0, fluency: 0, consistency: 0, terminology: 0, completeness: 0, formatPreservation: 0, spelling: 0, trademarkProtection: 0, redundancyRemoval: 0 }, averageScore: 0, reason: "评估服务故障", suggestions: "" },
-      usage: [{ inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0, modelName: REASONING_MODEL_NAME, type: 'evaluation' }]
+      result: {
+        scores: { accuracy: 0, fluency: 0, consistency: 0, terminology: 0, completeness: 0, formatPreservation: 0, spelling: 0, trademarkProtection: 0, redundancyRemoval: 0 },
+        averageScore: 0,
+        reason: `评估服务故障: ${error?.message || '未知错误'}`,
+        suggestions: ""
+      },
+      usage: accumulatedUsage.length > 0 ? accumulatedUsage : [{ inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0, modelName: REASONING_MODEL_NAME, type: 'evaluation', timestamp: Date.now() }]
     };
   }
 };

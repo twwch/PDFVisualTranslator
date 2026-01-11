@@ -32,12 +32,12 @@ const App: React.FC = () => {
     const [importRange, setImportRange] = useState<{ start: number, end: number }>({ start: 1, end: 1 });
 
     const calculateTotalUsage = (extraction: UsageStats[] = [], translation: UsageStats[] = [], evaluation: UsageStats[] = []) => {
-        const allStats = [...extraction, ...translation, ...evaluation];
+        const allStats = [...(extraction || []), ...(translation || []), ...(evaluation || [])].filter(Boolean);
         return {
-            inputTokens: allStats.reduce((acc, u) => acc + u.inputTokens, 0),
-            outputTokens: allStats.reduce((acc, u) => acc + u.outputTokens, 0),
-            totalTokens: allStats.reduce((acc, u) => acc + u.totalTokens, 0),
-            cost: allStats.reduce((acc, u) => acc + u.cost, 0)
+            inputTokens: allStats.reduce((acc, u) => acc + (u?.inputTokens || 0), 0),
+            outputTokens: allStats.reduce((acc, u) => acc + (u?.outputTokens || 0), 0),
+            totalTokens: allStats.reduce((acc, u) => acc + (u?.totalTokens || 0), 0),
+            cost: allStats.reduce((acc, u) => acc + (u?.cost || 0), 0)
         };
     };
 
@@ -208,11 +208,15 @@ const App: React.FC = () => {
                             // evalUsage is now the full array [Eval 1, Eval 2, ...]
                             const updatedUsage = {
                                 ...p.usage,
-                                evaluation: evalUsage,
-                                total: calculateTotalUsage(p.usage.extraction || [], p.usage.translation || [], evalUsage)
+                                evaluation: evalUsage || [],
+                                total: calculateTotalUsage(p.usage.extraction || [], p.usage.translation || [], evalUsage || [])
                             };
                             return { ...p, evaluation: evalResult, usage: updatedUsage, isEvaluating: false };
                         }));
+                    })
+                    .catch(err => {
+                        console.error("Evaluation background failed", err);
+                        setPages(prev => prev.map(p => p.pageNumber === page.pageNumber ? { ...p, isEvaluating: false } : p));
                     });
             } catch (error: any) {
                 setPages(prev => prev.map(p =>
@@ -259,11 +263,15 @@ const App: React.FC = () => {
                     setPages(prev => prev.map(p => {
                         const updatedUsage = {
                             ...p.usage,
-                            evaluation: evalUsage,
-                            total: calculateTotalUsage(p.usage.extraction || [], p.usage.translation || [], evalUsage)
-                        };
+                            evaluation: evalUsage || [],
+                            total: calculateTotalUsage(p.usage?.extraction || [], p.usage?.translation || [], evalUsage || [])
+                        } as any;
                         return { ...p, evaluation: evalResult, usage: updatedUsage, isEvaluating: false };
                     }));
+                })
+                .catch(err => {
+                    console.error("Refinement evaluation failed", err);
+                    setPages(prev => prev.map(p => p.pageNumber === pageNumber ? { ...p, isEvaluating: false } : p));
                 });
         } catch (error: any) {
             setPages(prev => prev.map(p => p.pageNumber === pageNumber ? { ...p, status: PageStatus.ERROR, errorMessage: error.message || "优化失败" } : p));
@@ -362,9 +370,10 @@ const App: React.FC = () => {
         csv += "页码,运行次序,类型,模型,输入 Token,输出 Token,总 Token,费用 ($),时间,Prompt\n";
         pages.forEach(p => {
             const process = (stats: UsageStats[] | undefined) => {
-                if (!stats) return;
+                if (!stats || !Array.isArray(stats)) return;
                 stats.forEach((u, i) => {
-                    csv += `${p.pageNumber},Run #${i + 1},${u.type || ''},${u.modelName},${u.inputTokens},${u.outputTokens},${u.totalTokens},${u.cost},${u.timestamp ? new Date(u.timestamp).toLocaleString() : ''},"${(u.prompt || '').replace(/"/g, '""')}"\n`;
+                    if (!u) return;
+                    csv += `${p.pageNumber},Run #${i + 1},${u.type || ''},${u.modelName || 'unknown'},${u.inputTokens || 0},${u.outputTokens || 0},${u.totalTokens || 0},${u.cost || 0},${u.timestamp ? new Date(u.timestamp).toLocaleString() : ''},"${(u.prompt || '').replace(/"/g, '""')}"\n`;
                 });
             };
             if (p.usage) {
@@ -397,12 +406,13 @@ const App: React.FC = () => {
             if (!stats) return;
             const statsArray = Array.isArray(stats) ? stats : [stats];
             statsArray.forEach(u => {
+                if (!u) return;
                 const model = u.modelName || 'unknown';
                 if (!acc[model]) acc[model] = { input: 0, output: 0, total: 0, cost: 0 };
-                acc[model].input += u.inputTokens;
-                acc[model].output += u.outputTokens;
-                acc[model].total += u.totalTokens;
-                acc[model].cost += u.cost;
+                acc[model].input += (u.inputTokens || 0);
+                acc[model].output += (u.outputTokens || 0);
+                acc[model].total += (u.totalTokens || 0);
+                acc[model].cost += (u.cost || 0);
             });
         };
 

@@ -54,13 +54,19 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry, onRetryEvaluation })
               title="查看消耗历史明细"
             >
               <div className="flex flex-col">
-                <span className="flex items-center gap-0.5 font-bold tracking-tight"><Zap size={10} className="text-amber-500" />{page.usage.total.totalTokens.toLocaleString()}</span>
-                <span className="flex items-center gap-0.5 font-bold tracking-tight text-indigo-600"><Coins size={10} className="text-green-600" />${page.usage.total.cost.toFixed(4)}</span>
+                <span className="flex items-center gap-0.5 font-bold tracking-tight">
+                  <Zap size={10} className="text-amber-500" />
+                  {(page.usage?.total?.totalTokens || 0).toLocaleString()}
+                </span>
+                <span className="flex items-center gap-0.5 font-bold tracking-tight text-indigo-600">
+                  <Coins size={10} className="text-green-600" />
+                  ${(page.usage?.total?.cost || 0).toFixed(4)}
+                </span>
               </div>
               <div className="w-px h-6 bg-slate-100"></div>
               <div className="flex flex-col opacity-60">
-                <span>In: {page.usage.total.inputTokens.toLocaleString()}</span>
-                <span>Out: {page.usage.total.outputTokens.toLocaleString()}</span>
+                <span>In: {(page.usage?.total?.inputTokens || 0).toLocaleString()}</span>
+                <span>Out: {(page.usage?.total?.outputTokens || 0).toLocaleString()}</span>
               </div>
             </div>
           )}
@@ -130,10 +136,10 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry, onRetryEvaluation })
                   <div key={k} className="group">
                     <div className="flex justify-between text-[11px] mb-1.5">
                       <span className="text-slate-500 font-medium">{scoreLabels[k] || k}</span>
-                      <span className="font-bold text-slate-800">{v}/10</span>
+                      <span className="font-bold text-slate-800">{(v as number) || 0}/10</span>
                     </div>
                     <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                      <div className={`h-full transition-all duration-700 rounded-full ${Number(v) >= 8 ? 'bg-green-500' : Number(v) >= 5 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Number(v) * 10}%` }}></div>
+                      <div className={`h-full transition-all duration-700 rounded-full ${Number(v || 0) >= 8 ? 'bg-green-500' : Number(v || 0) >= 5 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${Number(v || 0) * 10}%` }}></div>
                     </div>
                   </div>
                 ))}
@@ -226,13 +232,13 @@ const PageCard: React.FC<PageCardProps> = ({ page, onRetry, onRetryEvaluation })
                             <div className="px-4 py-3 flex items-center justify-between border-b border-slate-100 bg-white/50">
                               <div className="flex items-center gap-4">
                                 <span className="text-[10px] font-black bg-slate-200 text-slate-500 px-2 py-0.5 rounded uppercase font-mono">Run #{i + 1}</span>
-                                <span className="text-[10px] text-slate-400 font-mono">{u.modelName.split('/').pop()}</span>
-                                {u.timestamp && <span className="text-[10px] text-slate-400 font-medium">@{new Date(u.timestamp).toLocaleTimeString()}</span>}
+                                <span className="text-[10px] text-slate-400 font-mono">{(u?.modelName || 'unknown').split('/').pop()}</span>
+                                {u?.timestamp && <span className="text-[10px] text-slate-400 font-medium">@{new Date(u.timestamp).toLocaleTimeString()}</span>}
                               </div>
                               <div className="flex items-center gap-4 text-xs">
-                                <span className="text-slate-500">In: <b>{u.inputTokens.toLocaleString()}</b></span>
-                                <span className="text-slate-500">Out: <b>{u.outputTokens.toLocaleString()}</b></span>
-                                <span className="text-indigo-600 font-black">${u.cost.toFixed(5)}</span>
+                                <span className="text-slate-500">In: <b>{(u?.inputTokens || 0).toLocaleString()}</b></span>
+                                <span className="text-slate-500">Out: <b>{(u?.outputTokens || 0).toLocaleString()}</b></span>
+                                <span className="text-indigo-600 font-black">${(u?.cost || 0).toFixed(5)}</span>
                               </div>
                             </div>
                             {u.prompt && (
